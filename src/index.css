@@ -1,20 +1,20 @@
 :root {
-  --page-bg: #08050d;
-  --panel-bg: #130b1f;
-  --text-primary: #fff9ff;
-  --text-secondary: #ded4e8;
-  --text-muted: #bbb0c8;
-  --pink: #ff52b0;
-  --pink-light: #ffb7dc;
-  --purple: #8b5cf6;
-  --purple-light: #c7a6ff;
+  --page-bg: #ffffff;
+  --panel-bg: #fdf9fc;
+  --text-primary: #211822;
+  --text-secondary: #6f6470;
+  --text-muted: #918492;
+  --pink: #ed5ba7;
+  --pink-light: #fff0f7;
+  --purple: #7c4d9e;
+  --purple-light: #b99ad0;
 
   color: var(--text-primary);
   background: var(--page-bg);
   font: 16px/1.5 system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
     sans-serif;
   letter-spacing: 0;
-  color-scheme: dark;
+  color-scheme: light;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;

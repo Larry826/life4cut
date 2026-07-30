@@ -1,11 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import oazLogo from './assets/oaz_logo.png'
 import './App.css'
+import { captureFrameFromVideo } from './utils/captureFrame'
+
+const TOTAL_SHOTS = 6
+const SHOT_INTERVAL_MS = 5000
+const COUNTDOWN_SECONDS = 3
+const COUNTDOWN_TICK_MS = 1000
+const COUNTDOWN_DURATION_MS = COUNTDOWN_SECONDS * COUNTDOWN_TICK_MS
+const PREPARATION_DELAY_MS = Math.max(SHOT_INTERVAL_MS - COUNTDOWN_DURATION_MS, 0)
+const FLASH_DURATION_MS = 200
+const CAPTURE_ERROR_MESSAGE =
+  '사진을 촬영하지 못했어요.\n카메라 화면을 확인한 뒤 다시 시도해 주세요.'
 
 const guideItems = [
   {
-    title: '네 장 연속 촬영',
-    description: '준비가 끝나면 카운트다운 후 사진을 네 번 촬영해요.',
+    title: '여섯 장 연속 촬영',
+    description: '준비가 끝나면 카운트다운 후 사진을 여섯 번 촬영해요.',
   },
   {
     title: '카메라 권한',
@@ -146,7 +157,7 @@ function GuideScreen({ cameraError, isConnecting, onBack, onOpenCamera }) {
         <div className="guide-heading">
           <BrandHeader />
           <h1 id="guide-title">촬영 전 확인해 주세요</h1>
-          <p className="screen-description">사진 네 장을 연속으로 촬영할 예정이에요.</p>
+          <p className="screen-description">사진 여섯 장을 연속으로 촬영할 예정이에요.</p>
         </div>
 
         <div className="guide-list">
@@ -190,10 +201,20 @@ function GuideScreen({ cameraError, isConnecting, onBack, onOpenCamera }) {
   )
 }
 
-function CameraPreview({ facingMode, isSwitchingCamera, stream }) {
-  const videoRef = useRef(null)
-  const [isVideoReady, setIsVideoReady] = useState(false)
-
+function CameraPreview({
+  countdown,
+  currentShotIndex,
+  captureStatus,
+  facingMode,
+  isFlashVisible,
+  isSequenceRunning,
+  isSwitchingCamera,
+  isVideoReady,
+  onVideoReadyChange,
+  nextShotRemaining,
+  stream,
+  videoRef,
+}) {
   useEffect(() => {
     const videoElement = videoRef.current
 
@@ -201,7 +222,7 @@ function CameraPreview({ facingMode, isSwitchingCamera, stream }) {
       return undefined
     }
 
-    setIsVideoReady(false)
+    onVideoReadyChange(false)
     videoElement.srcObject = stream
 
     if (stream) {
@@ -215,12 +236,14 @@ function CameraPreview({ facingMode, isSwitchingCamera, stream }) {
     return () => {
       videoElement.srcObject = null
     }
-  }, [stream])
+  }, [onVideoReadyChange, stream, videoRef])
 
   const handleVideoReady = () => {
-    setIsVideoReady(true)
-
     const videoElement = videoRef.current
+    onVideoReadyChange(
+      Boolean(videoElement?.videoWidth > 0 && videoElement?.videoHeight > 0),
+    )
+
     const playPromise = videoElement?.play()
 
     if (playPromise && typeof playPromise.catch === 'function') {
@@ -246,19 +269,92 @@ function CameraPreview({ facingMode, isSwitchingCamera, stream }) {
           {isSwitchingCamera ? '카메라 전환 중...' : '카메라 화면을 준비하고 있어요.'}
         </div>
       )}
+      {isSequenceRunning && countdown && (
+        <div className="countdown-overlay" aria-live="assertive">
+          <span className="countdown-number">{countdown}</span>
+          <span className="countdown-label">
+            {currentShotIndex + 1}번째 사진 준비
+          </span>
+        </div>
+      )}
+      {isSequenceRunning && !countdown && captureStatus && (
+        <div className="capture-status-overlay" aria-live="polite">
+          <span>{captureStatus}</span>
+          {nextShotRemaining && (
+            <span className="next-shot-remaining">
+              다음 촬영까지 {nextShotRemaining}초
+            </span>
+          )}
+        </div>
+      )}
+      {isFlashVisible && <div className="capture-flash" aria-hidden="true" />}
+    </div>
+  )
+}
+
+function CaptureProgress({ capturedPhotos, currentShotIndex, isSequenceRunning }) {
+  return (
+    <div className="capture-progress" aria-label="촬영 진행 상황">
+      <p className="capture-progress-text">
+        촬영 진행 상황:{' '}
+        <strong>
+          {Math.min(capturedPhotos.length + 1, TOTAL_SHOTS)} / {TOTAL_SHOTS}
+        </strong>
+      </p>
+      <div className="capture-slots">
+        {Array.from({ length: TOTAL_SHOTS }, (_, index) => {
+          const photo = capturedPhotos[index]
+          const isCurrent = isSequenceRunning && index === currentShotIndex
+          const slotLabel = photo
+            ? `${index + 1}번째 사진 촬영 완료`
+            : isCurrent
+              ? `${index + 1}번째 사진 촬영 중`
+              : `${index + 1}번째 사진 대기`
+
+          return (
+            <span
+              className={`capture-slot ${photo ? 'capture-slot-complete' : ''} ${
+                isCurrent ? 'capture-slot-current' : ''
+              }`}
+              key={index}
+              title={slotLabel}
+            >
+              <span aria-hidden="true">{photo ? '✓' : index + 1}</span>
+              <span className="sr-only">{slotLabel}</span>
+            </span>
+          )
+        })}
+      </div>
     </div>
   )
 }
 
 function CameraScreen({
   canSwitchCamera,
+  capturedPhotos,
+  captureError,
+  captureStatus,
+  countdown,
   cameraNotice,
+  currentShotIndex,
   facingMode,
+  isCapturingFrame,
+  isFlashVisible,
+  isSequenceRunning,
   isSwitchingCamera,
+  isVideoReady,
+  nextShotRemaining,
   onBack,
+  onCancelCapture,
+  onStartCapture,
   onSwitchCamera,
+  onVideoReadyChange,
   stream,
+  videoRef,
 }) {
+  const isStartDisabled =
+    !isVideoReady || isSequenceRunning || isCapturingFrame || !stream
+
   return (
     <main className="screen camera-screen">
       <section className="camera-content" aria-labelledby="camera-title">
@@ -271,20 +367,41 @@ function CameraScreen({
         </div>
 
         <CameraPreview
+          captureStatus={captureStatus}
+          countdown={countdown}
+          currentShotIndex={currentShotIndex}
           facingMode={facingMode}
+          isFlashVisible={isFlashVisible}
+          isSequenceRunning={isSequenceRunning}
           isSwitchingCamera={isSwitchingCamera}
+          isVideoReady={isVideoReady}
+          nextShotRemaining={nextShotRemaining}
+          videoRef={videoRef}
+          onVideoReadyChange={onVideoReadyChange}
           stream={stream}
+        />
+
+        <CaptureProgress
+          capturedPhotos={capturedPhotos}
+          currentShotIndex={currentShotIndex}
+          isSequenceRunning={isSequenceRunning}
         />
 
         <div className="camera-stage" aria-live="polite">
           <span className="stage-dot" aria-hidden="true" />
-          <span>{cameraNotice || '카메라 연결 완료'}</span>
+          <span>{captureStatus || cameraNotice || '카메라 연결 완료'}</span>
         </div>
+
+        {captureError && (
+          <div className="camera-alert" role="alert" aria-live="assertive">
+            <p>{captureError}</p>
+          </div>
+        )}
 
         {canSwitchCamera && (
           <button
             className="button button-secondary camera-switch-button"
-            disabled={isSwitchingCamera}
+            disabled={isSwitchingCamera || isSequenceRunning}
             type="button"
             onClick={onSwitchCamera}
           >
@@ -293,15 +410,78 @@ function CameraScreen({
         )}
 
         <div className="camera-actions">
-          <button className="button button-secondary" type="button" onClick={onBack}>
-            돌아가기
+          <button
+            className="button button-secondary"
+            type="button"
+            onClick={isSequenceRunning ? onCancelCapture : onBack}
+          >
+            {isSequenceRunning ? '촬영 취소' : '돌아가기'}
           </button>
-          <button className="button button-primary button-disabled" disabled type="button">
-            촬영 기능 준비 중
+          <button
+            className="button button-primary"
+            disabled={isStartDisabled}
+            type="button"
+            onClick={onStartCapture}
+          >
+            {!isVideoReady ? '카메라 준비 중...' : '6장 촬영 시작'}
           </button>
         </div>
         <p className="helper-text camera-helper">
-          다음 단계에서 네 장 연속 촬영을 연결할 예정이에요.
+          {isSequenceRunning
+            ? '카운트다운이 끝나면 자동으로 사진이 촬영돼요.'
+            : '총 여섯 장을 연속으로 촬영할 예정이에요.'}
+        </p>
+      </section>
+    </main>
+  )
+}
+
+function ReviewScreen({ capturedPhotos, isReconnectingCamera, onRetake }) {
+  return (
+    <main className="screen review-screen">
+      <section className="review-content" aria-labelledby="review-title">
+        <div className="review-heading">
+          <BrandHeader />
+          <h1 id="review-title">촬영 결과를 확인해 주세요</h1>
+          <p className="screen-description">
+            여섯 장의 사진이 모두 촬영되었어요.
+            <br />
+            다음 단계에서 이 중 4장을 골라 최종 네컷을 만들 예정이에요.
+          </p>
+        </div>
+
+        <div className="review-grid">
+          {capturedPhotos.map((photo) => (
+            <figure className="review-photo-card" key={photo.id}>
+              <span className="review-photo-number" aria-hidden="true">
+                {photo.shotNumber}
+              </span>
+              <img
+                className="review-photo"
+                src={photo.url}
+                alt={`${photo.shotNumber}번째 촬영 사진`}
+              />
+            </figure>
+          ))}
+        </div>
+
+        <div className="review-actions">
+          <button
+            className="button button-secondary"
+            disabled={isReconnectingCamera}
+            type="button"
+            onClick={onRetake}
+          >
+            {isReconnectingCamera ? '카메라 다시 연결 중...' : '전체 다시 촬영'}
+          </button>
+          <button className="button button-primary button-disabled" disabled type="button">
+            4장 선택 준비 중
+          </button>
+        </div>
+        <p className="helper-text review-helper">
+          다음 단계에서 6장 중 4장을 골라
+          <br />
+          최종 네컷 이미지를 만들 예정이에요.
         </p>
       </section>
     </main>
@@ -315,9 +495,123 @@ function App() {
   const [cameraNotice, setCameraNotice] = useState('')
   const [cameraStream, setCameraStream] = useState(null)
   const [cameraDeviceCount, setCameraDeviceCount] = useState(0)
+  const [capturedPhotos, setCapturedPhotos] = useState([])
+  const [currentShotIndex, setCurrentShotIndex] = useState(0)
+  const [countdown, setCountdown] = useState(null)
+  const [nextShotRemaining, setNextShotRemaining] = useState(null)
+  const [isSequenceRunning, setIsSequenceRunning] = useState(false)
+  const [isCapturingFrame, setIsCapturingFrame] = useState(false)
+  const [isFlashVisible, setIsFlashVisible] = useState(false)
+  const [isVideoReady, setIsVideoReady] = useState(false)
+  const [captureError, setCaptureError] = useState('')
+  const [captureStatus, setCaptureStatus] = useState('')
   const [isConnecting, setIsConnecting] = useState(false)
+  const [isReconnectingCamera, setIsReconnectingCamera] = useState(false)
   const [isSwitchingCamera, setIsSwitchingCamera] = useState(false)
   const streamRef = useRef(null)
+  const videoRef = useRef(null)
+  const capturedPhotosRef = useRef([])
+  const captureTimeoutsRef = useRef(new Set())
+  const captureSessionRef = useRef(0)
+
+  const clearCaptureTimers = useCallback(() => {
+    captureTimeoutsRef.current.forEach((timer) => {
+      clearTimeout(timer.timeoutId)
+      timer.resolve(false)
+    })
+    captureTimeoutsRef.current.clear()
+  }, [])
+
+  const waitForCaptureDelay = useCallback((duration) => {
+    return new Promise((resolve) => {
+      const timer = {
+        timeoutId: null,
+        resolve,
+      }
+
+      timer.timeoutId = setTimeout(() => {
+        captureTimeoutsRef.current.delete(timer)
+        resolve(true)
+      }, duration)
+      captureTimeoutsRef.current.add(timer)
+    })
+  }, [])
+
+  const waitForNextCountdownWindow = useCallback(
+    async (sessionId, lastShotCapturedAt) => {
+      const nextShotTargetAt = lastShotCapturedAt + SHOT_INTERVAL_MS
+      const countdownStartAt = nextShotTargetAt - COUNTDOWN_DURATION_MS
+
+      while (performance.now() < countdownStartAt) {
+        if (captureSessionRef.current !== sessionId) {
+          return false
+        }
+
+        setNextShotRemaining(
+          Math.max(
+            COUNTDOWN_SECONDS + 1,
+            Math.ceil((nextShotTargetAt - performance.now()) / COUNTDOWN_TICK_MS),
+          ),
+        )
+
+        const remainingUntilCountdown = countdownStartAt - performance.now()
+        const completed = await waitForCaptureDelay(
+          Math.min(COUNTDOWN_TICK_MS, Math.max(remainingUntilCountdown, 0)),
+        )
+
+        if (!completed || captureSessionRef.current !== sessionId) {
+          return false
+        }
+      }
+
+      setNextShotRemaining(null)
+      return true
+    },
+    [waitForCaptureDelay],
+  )
+
+  const revokePhotoUrls = useCallback((photos) => {
+    photos.forEach((photo) => {
+      if (photo.url) {
+        URL.revokeObjectURL(photo.url)
+      }
+    })
+  }, [])
+
+  const clearCapturedPhotos = useCallback(() => {
+    revokePhotoUrls(capturedPhotosRef.current)
+    capturedPhotosRef.current = []
+    setCapturedPhotos([])
+  }, [revokePhotoUrls])
+
+  const resetCaptureState = useCallback((options = {}) => {
+    const { clearError = true } = options
+
+    captureSessionRef.current += 1
+    clearCaptureTimers()
+    setCurrentShotIndex(0)
+    setCountdown(null)
+    setNextShotRemaining(null)
+    setIsSequenceRunning(false)
+    setIsCapturingFrame(false)
+    setIsFlashVisible(false)
+    setCaptureStatus('')
+
+    if (clearError) {
+      setCaptureError('')
+    }
+  }, [clearCaptureTimers])
+
+  const handleVideoReadyChange = useCallback((nextIsReady) => {
+    setIsVideoReady(nextIsReady)
+  }, [])
+
+  const isCameraStreamActive = useCallback(() => {
+    return Boolean(
+      streamRef.current &&
+        streamRef.current.getVideoTracks().some((track) => track.readyState === 'live'),
+    )
+  }, [])
 
   const stopCameraStream = useCallback((options = {}) => {
     const { resetDeviceCount = true, updateState = true } = options
@@ -331,6 +625,7 @@ function App() {
 
     if (updateState) {
       setCameraStream(null)
+      setIsVideoReady(false)
 
       if (resetDeviceCount) {
         setCameraDeviceCount(0)
@@ -339,10 +634,18 @@ function App() {
   }, [])
 
   useEffect(() => {
+    capturedPhotosRef.current = capturedPhotos
+  }, [capturedPhotos])
+
+  useEffect(() => {
     return () => {
+      captureSessionRef.current += 1
+      clearCaptureTimers()
+      revokePhotoUrls(capturedPhotosRef.current)
+      capturedPhotosRef.current = []
       stopCameraStream({ updateState: false })
     }
-  }, [stopCameraStream])
+  }, [clearCaptureTimers, revokePhotoUrls, stopCameraStream])
 
   const getVideoDeviceCount = async () => {
     if (
@@ -372,6 +675,7 @@ function App() {
 
   const applyCameraStream = async (stream, facingMode) => {
     streamRef.current = stream
+    setIsVideoReady(false)
     setCameraStream(stream)
     setCameraFacingMode(facingMode)
     setCameraDeviceCount(await getVideoDeviceCount())
@@ -379,7 +683,7 @@ function App() {
 
   const openCamera = async (facingMode = cameraFacingMode) => {
     if (isConnecting) {
-      return
+      return false
     }
 
     setIsConnecting(true)
@@ -392,23 +696,162 @@ function App() {
     if (supportMessage) {
       setCameraError(supportMessage)
       setIsConnecting(false)
-      return
+      return false
     }
 
     try {
       const stream = await createCameraStream(facingMode)
       await applyCameraStream(stream, facingMode)
       setCurrentScreen('camera')
+      return true
     } catch (error) {
       stopCameraStream()
       setCameraError(getCameraErrorMessage(error))
       setCurrentScreen('guide')
+      return false
     } finally {
       setIsConnecting(false)
     }
   }
 
+  const canCaptureFrame = useCallback(() => {
+    const videoElement = videoRef.current
+
+    return Boolean(
+      isVideoReady &&
+        isCameraStreamActive() &&
+        videoElement?.videoWidth > 0 &&
+        videoElement?.videoHeight > 0,
+    )
+  }, [isCameraStreamActive, isVideoReady])
+
+  const handleCaptureFailure = useCallback(() => {
+    resetCaptureState({ clearError: false })
+    clearCapturedPhotos()
+    setCaptureError(CAPTURE_ERROR_MESSAGE)
+    setCaptureStatus('카메라 화면을 확인한 뒤 다시 시도해 주세요.')
+  }, [clearCapturedPhotos, resetCaptureState])
+
+  const cancelCaptureSequence = useCallback((options = {}) => {
+    const { message = '' } = options
+
+    resetCaptureState()
+    clearCapturedPhotos()
+
+    if (message) {
+      setCaptureStatus(message)
+    }
+  }, [clearCapturedPhotos, resetCaptureState])
+
+  const startCaptureSequence = async () => {
+    if (isSequenceRunning || isCapturingFrame || !canCaptureFrame()) {
+      setCaptureError(CAPTURE_ERROR_MESSAGE)
+      return
+    }
+
+    resetCaptureState()
+    clearCapturedPhotos()
+
+    const sessionId = captureSessionRef.current + 1
+    captureSessionRef.current = sessionId
+    const nextPhotos = []
+
+    setCaptureError('')
+    setCaptureStatus('카운트다운 중')
+    setCurrentShotIndex(0)
+    setIsSequenceRunning(true)
+
+    try {
+      for (let shotIndex = 0; shotIndex < TOTAL_SHOTS; shotIndex += 1) {
+        if (captureSessionRef.current !== sessionId) {
+          return
+        }
+
+        setCurrentShotIndex(shotIndex)
+        setCaptureStatus('카운트다운 중')
+
+        for (let count = COUNTDOWN_SECONDS; count >= 1; count -= 1) {
+          if (captureSessionRef.current !== sessionId) {
+            return
+          }
+
+          setCountdown(count)
+
+          const completed = await waitForCaptureDelay(COUNTDOWN_TICK_MS)
+
+          if (!completed || captureSessionRef.current !== sessionId) {
+            return
+          }
+        }
+
+        setCountdown(null)
+        setCaptureStatus('촬영 중')
+        setIsCapturingFrame(true)
+
+        if (!canCaptureFrame()) {
+          throw new Error('Camera is not ready')
+        }
+
+        const shotCapturedAt = performance.now()
+        const capturedPhoto = await captureFrameFromVideo(
+          videoRef.current,
+          cameraFacingMode,
+          shotIndex + 1,
+        )
+
+        if (captureSessionRef.current !== sessionId) {
+          revokePhotoUrls([capturedPhoto])
+          return
+        }
+
+        nextPhotos.push(capturedPhoto)
+        capturedPhotosRef.current = nextPhotos
+        setCapturedPhotos([...nextPhotos])
+        setIsCapturingFrame(false)
+        setIsFlashVisible(true)
+
+        await waitForCaptureDelay(FLASH_DURATION_MS)
+
+        if (captureSessionRef.current !== sessionId) {
+          return
+        }
+
+        setIsFlashVisible(false)
+
+        if (shotIndex < TOTAL_SHOTS - 1) {
+          setCurrentShotIndex(shotIndex + 1)
+          setCaptureStatus('촬영 완료! 다음 사진을 준비해 주세요.')
+
+          const completed = await waitForNextCountdownWindow(sessionId, shotCapturedAt)
+
+          if (!completed || captureSessionRef.current !== sessionId) {
+            return
+          }
+        }
+      }
+
+      if (captureSessionRef.current !== sessionId || nextPhotos.length !== TOTAL_SHOTS) {
+        return
+      }
+
+      clearCaptureTimers()
+      setCountdown(null)
+      setIsSequenceRunning(false)
+      setIsCapturingFrame(false)
+      setIsFlashVisible(false)
+      setCaptureStatus('')
+      stopCameraStream()
+      setCurrentScreen('review')
+    } catch {
+      if (captureSessionRef.current === sessionId) {
+        handleCaptureFailure()
+      }
+    }
+  }
+
   const handleBackToStart = () => {
+    resetCaptureState()
+    clearCapturedPhotos()
     stopCameraStream()
     setCameraError('')
     setCameraNotice('')
@@ -416,6 +859,8 @@ function App() {
   }
 
   const handleBackToGuide = () => {
+    resetCaptureState()
+    clearCapturedPhotos()
     stopCameraStream()
     setCameraError('')
     setCameraNotice('')
@@ -425,7 +870,7 @@ function App() {
   }
 
   const handleSwitchCamera = async () => {
-    if (isSwitchingCamera || isConnecting) {
+    if (isSwitchingCamera || isConnecting || isSequenceRunning) {
       return
     }
 
@@ -457,6 +902,38 @@ function App() {
     }
   }
 
+  const handleRetakeAll = async () => {
+    if (isReconnectingCamera) {
+      return
+    }
+
+    resetCaptureState()
+    clearCapturedPhotos()
+    setIsReconnectingCamera(true)
+
+    try {
+      await openCamera(cameraFacingMode)
+    } finally {
+      setIsReconnectingCamera(false)
+    }
+  }
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden' && isSequenceRunning) {
+        cancelCaptureSequence({
+          message: '화면을 다시 확인한 뒤 촬영을 시작해 주세요.',
+        })
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [cancelCaptureSequence, isSequenceRunning])
+
   return (
     <div className="life4cut-app">
       {currentScreen === 'start' && <StartScreen onStart={() => setCurrentScreen('guide')} />}
@@ -473,12 +950,34 @@ function App() {
       {currentScreen === 'camera' && (
         <CameraScreen
           canSwitchCamera={cameraDeviceCount >= 2}
+          capturedPhotos={capturedPhotos}
+          captureError={captureError}
+          captureStatus={captureStatus}
           cameraNotice={cameraNotice}
+          countdown={countdown}
+          currentShotIndex={currentShotIndex}
           facingMode={cameraFacingMode}
+          isCapturingFrame={isCapturingFrame}
+          isFlashVisible={isFlashVisible}
+          isSequenceRunning={isSequenceRunning}
           isSwitchingCamera={isSwitchingCamera}
+          isVideoReady={isVideoReady}
+          nextShotRemaining={nextShotRemaining}
           stream={cameraStream}
           onBack={handleBackToGuide}
+          onCancelCapture={() => cancelCaptureSequence()}
+          onStartCapture={startCaptureSequence}
           onSwitchCamera={handleSwitchCamera}
+          onVideoReadyChange={handleVideoReadyChange}
+          videoRef={videoRef}
+        />
+      )}
+
+      {currentScreen === 'review' && (
+        <ReviewScreen
+          capturedPhotos={capturedPhotos}
+          isReconnectingCamera={isReconnectingCamera}
+          onRetake={handleRetakeAll}
         />
       )}
     </div>

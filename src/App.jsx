@@ -10,6 +10,7 @@ const COUNTDOWN_TICK_MS = 1000
 const COUNTDOWN_DURATION_MS = COUNTDOWN_SECONDS * COUNTDOWN_TICK_MS
 const PREPARATION_DELAY_MS = Math.max(SHOT_INTERVAL_MS - COUNTDOWN_DURATION_MS, 0)
 const FLASH_DURATION_MS = 200
+const REQUIRED_SELECTION_COUNT = 4
 const CAPTURE_ERROR_MESSAGE =
   '사진을 촬영하지 못했어요.\n카메라 화면을 확인한 뒤 다시 시도해 주세요.'
 
@@ -436,33 +437,67 @@ function CameraScreen({
   )
 }
 
-function ReviewScreen({ capturedPhotos, isReconnectingCamera, onRetake }) {
+function ReviewScreen({
+  capturedPhotos,
+  isReconnectingCamera,
+  onCompleteSelection,
+  onRetake,
+  onTogglePhoto,
+  selectedPhotoIds,
+  selectionNotice,
+}) {
+  const selectedCount = selectedPhotoIds.length
+
   return (
     <main className="screen review-screen">
       <section className="review-content" aria-labelledby="review-title">
         <div className="review-heading">
           <BrandHeader />
-          <h1 id="review-title">촬영 결과를 확인해 주세요</h1>
-          <p className="screen-description">
-            여섯 장의 사진이 모두 촬영되었어요.
-            <br />
-            다음 단계에서 이 중 4장을 골라 최종 네컷을 만들 예정이에요.
-          </p>
+          <h1 id="review-title">6장 중 4장을 골라 주세요</h1>
+          <p className="screen-description">선택한 순서대로 최종 네컷에 배치돼요.</p>
+        </div>
+
+        <div className="selection-summary" aria-live="polite">
+          <strong>
+            {selectedCount} / {REQUIRED_SELECTION_COUNT}장 선택
+          </strong>
+          <span>{selectionNotice || '사진을 누르면 선택 순서가 지정돼요.'}</span>
         </div>
 
         <div className="review-grid">
-          {capturedPhotos.map((photo) => (
-            <figure className="review-photo-card" key={photo.id}>
-              <span className="review-photo-number" aria-hidden="true">
-                {photo.shotNumber}
-              </span>
+          {capturedPhotos.map((photo) => {
+            const selectedIndex = selectedPhotoIds.indexOf(photo.id)
+            const selectionOrder = selectedIndex + 1
+            const isSelected = selectedIndex >= 0
+            const ariaLabel = isSelected
+              ? `촬영 ${photo.shotNumber}번 사진, 최종 네컷의 ${selectionOrder}번째 사진으로 선택됨`
+              : `촬영 ${photo.shotNumber}번 사진, 선택되지 않음`
+
+            return (
+              <button
+                aria-label={ariaLabel}
+                aria-pressed={isSelected}
+                className={`review-photo-button ${isSelected ? 'review-photo-selected' : ''}`}
+                key={photo.id}
+                type="button"
+                onClick={() => onTogglePhoto(photo.id)}
+              >
+                <span className="review-shot-label">촬영 {photo.shotNumber}</span>
+                {isSelected && (
+                  <span className="review-selection-badge">
+                    <span aria-hidden="true">{selectionOrder}</span>
+                    <span className="sr-only">선택됨</span>
+                  </span>
+                )}
+                {isSelected && <span className="review-selected-text">선택됨</span>}
               <img
                 className="review-photo"
                 src={photo.url}
                 alt={`${photo.shotNumber}번째 촬영 사진`}
               />
-            </figure>
-          ))}
+              </button>
+            )
+          })}
         </div>
 
         <div className="review-actions">
@@ -474,14 +509,72 @@ function ReviewScreen({ capturedPhotos, isReconnectingCamera, onRetake }) {
           >
             {isReconnectingCamera ? '카메라 다시 연결 중...' : '전체 다시 촬영'}
           </button>
+          <button
+            className="button button-primary"
+            disabled={selectedCount !== REQUIRED_SELECTION_COUNT}
+            type="button"
+            onClick={onCompleteSelection}
+          >
+            {selectedCount === REQUIRED_SELECTION_COUNT
+              ? '선택한 4장 확인하기'
+              : '4장을 모두 선택해 주세요'}
+          </button>
+        </div>
+      </section>
+    </main>
+  )
+}
+
+function SelectionPreviewScreen({
+  isReconnectingCamera,
+  onBackToReview,
+  onRetake,
+  selectedPhotos,
+}) {
+  const cutLabels = ['첫 번째 컷', '두 번째 컷', '세 번째 컷', '네 번째 컷']
+
+  return (
+    <main className="screen selection-preview-screen">
+      <section className="selection-preview-content" aria-labelledby="selection-preview-title">
+        <div className="selection-preview-heading">
+          <BrandHeader />
+          <h1 id="selection-preview-title">선택한 사진을 확인해 주세요</h1>
+          <p className="screen-description">
+            이 순서대로 최종 네컷에 배치될 예정이에요.
+          </p>
+        </div>
+
+        <div className="selected-strip-preview" aria-label="선택한 네컷 순서">
+          {selectedPhotos.map((photo, index) => (
+            <figure className="selected-photo-card" key={photo.id}>
+              <figcaption className="selected-cut-label">{cutLabels[index]}</figcaption>
+              <img
+                className="selected-photo"
+                src={photo.url}
+                alt={`${cutLabels[index]}, ${photo.shotNumber}번째 촬영 사진`}
+              />
+            </figure>
+          ))}
+        </div>
+
+        <div className="selection-preview-actions">
+          <button className="button button-secondary" type="button" onClick={onBackToReview}>
+            선택 다시 하기
+          </button>
+          <button
+            className="button button-secondary"
+            disabled={isReconnectingCamera}
+            type="button"
+            onClick={onRetake}
+          >
+            {isReconnectingCamera ? '카메라 다시 연결 중...' : '전체 다시 촬영'}
+          </button>
           <button className="button button-primary button-disabled" disabled type="button">
-            4장 선택 준비 중
+            프레임 꾸미기 준비 중
           </button>
         </div>
         <p className="helper-text review-helper">
-          다음 단계에서 6장 중 4장을 골라
-          <br />
-          최종 네컷 이미지를 만들 예정이에요.
+          다음 단계에서 프레임 색상과 문구를 선택할 수 있어요.
         </p>
       </section>
     </main>
@@ -496,6 +589,8 @@ function App() {
   const [cameraStream, setCameraStream] = useState(null)
   const [cameraDeviceCount, setCameraDeviceCount] = useState(0)
   const [capturedPhotos, setCapturedPhotos] = useState([])
+  const [selectedPhotoIds, setSelectedPhotoIds] = useState([])
+  const [selectionNotice, setSelectionNotice] = useState('')
   const [currentShotIndex, setCurrentShotIndex] = useState(0)
   const [countdown, setCountdown] = useState(null)
   const [nextShotRemaining, setNextShotRemaining] = useState(null)
@@ -582,6 +677,8 @@ function App() {
     revokePhotoUrls(capturedPhotosRef.current)
     capturedPhotosRef.current = []
     setCapturedPhotos([])
+    setSelectedPhotoIds([])
+    setSelectionNotice('')
   }, [revokePhotoUrls])
 
   const resetCaptureState = useCallback((options = {}) => {
@@ -918,6 +1015,37 @@ function App() {
     }
   }
 
+  const handleTogglePhotoSelection = (photoId) => {
+    if (selectedPhotoIds.includes(photoId)) {
+      setSelectionNotice('')
+      setSelectedPhotoIds((currentSelectedIds) =>
+        currentSelectedIds.filter((selectedId) => selectedId !== photoId),
+      )
+      return
+    }
+
+    if (selectedPhotoIds.length >= REQUIRED_SELECTION_COUNT) {
+      setSelectionNotice('사진은 최대 4장까지 선택할 수 있어요.')
+      return
+    }
+
+    setSelectionNotice('')
+    setSelectedPhotoIds((currentSelectedIds) => [...currentSelectedIds, photoId])
+  }
+
+  const handleCompleteSelection = () => {
+    if (selectedPhotoIds.length !== REQUIRED_SELECTION_COUNT) {
+      return
+    }
+
+    setSelectionNotice('')
+    setCurrentScreen('selectionPreview')
+  }
+
+  const selectedPhotos = selectedPhotoIds
+    .map((photoId) => capturedPhotos.find((photo) => photo.id === photoId))
+    .filter(Boolean)
+
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden' && isSequenceRunning) {
@@ -977,6 +1105,19 @@ function App() {
         <ReviewScreen
           capturedPhotos={capturedPhotos}
           isReconnectingCamera={isReconnectingCamera}
+          selectedPhotoIds={selectedPhotoIds}
+          selectionNotice={selectionNotice}
+          onCompleteSelection={handleCompleteSelection}
+          onRetake={handleRetakeAll}
+          onTogglePhoto={handleTogglePhotoSelection}
+        />
+      )}
+
+      {currentScreen === 'selectionPreview' && (
+        <SelectionPreviewScreen
+          isReconnectingCamera={isReconnectingCamera}
+          selectedPhotos={selectedPhotos}
+          onBackToReview={() => setCurrentScreen('review')}
           onRetake={handleRetakeAll}
         />
       )}

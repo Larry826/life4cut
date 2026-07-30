@@ -1,121 +1,125 @@
 import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
 import './App.css'
 
-function App() {
-  const [count, setCount] = useState(0)
+const guideItems = [
+  {
+    title: '네 장 연속 촬영',
+    description: '준비가 끝나면 카운트다운 후 사진을 네 번 촬영해요.',
+  },
+  {
+    title: '카메라 권한',
+    description: '촬영을 위해 브라우저의 카메라 사용 권한이 필요해요.',
+  },
+  {
+    title: '브라우저 안에서 처리',
+    description: '촬영한 이미지는 외부 서버로 전송하지 않아요.',
+  },
+]
 
+const stripDecorations = ['heart', 'star', 'smile', 'sparkle']
+
+function PhotoStrip() {
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
+    <div className="photo-strip" aria-hidden="true">
+      {stripDecorations.map((decoration) => (
+        <div className={`strip-frame strip-frame-${decoration}`} key={decoration}>
+          <span className={`shape shape-${decoration}`} />
         </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
+      ))}
+    </div>
+  )
+}
+
+function StartScreen({ onStart }) {
+  return (
+    <main className="screen start-screen">
+      <section className="start-copy" aria-labelledby="start-title">
+        <p className="brand-name">OAZ_인생네컷</p>
+        <h1 id="start-title">
+          우리만의 순간을
+          <br />
+          네 컷으로 남겨요
+        </h1>
+        <p className="screen-description">
+          카메라로 사진 네 장을 찍고
+          <br />
+          나만의 네컷 이미지를 만들어 보세요.
+        </p>
+        <div className="start-actions">
+          <button className="button button-primary" type="button" onClick={onStart}>
+            촬영 시작하기
+          </button>
+          <p className="helper-text">
+            사진은 서버에 업로드되지 않고
+            <br />
+            현재 브라우저 안에서만 처리돼요.
           </p>
         </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
       </section>
 
-      <div className="ticks"></div>
+      <div className="start-visual">
+        <PhotoStrip />
+      </div>
+    </main>
+  )
+}
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
+function GuideScreen({ onBack }) {
+  return (
+    <main className="screen guide-screen">
+      <section className="guide-content" aria-labelledby="guide-title">
+        <div className="guide-heading">
+          <p className="brand-name">OAZ_인생네컷</p>
+          <h1 id="guide-title">촬영 전 확인해 주세요</h1>
+          <p className="screen-description">사진 네 장을 연속으로 촬영할 예정이에요.</p>
         </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
+
+        <div className="guide-list">
+          {guideItems.map((item, index) => (
+            <article className="guide-card" key={item.title}>
+              <span className="guide-card-number" aria-hidden="true">
+                {index + 1}
+              </span>
+              <div>
+                <h2>{item.title}</h2>
+                <p>{item.description}</p>
+              </div>
+            </article>
+          ))}
         </div>
+
+        <div className="guide-actions">
+          <button className="button button-secondary" type="button" onClick={onBack}>
+            돌아가기
+          </button>
+          <button
+            aria-describedby="camera-pending-note"
+            className="button button-primary button-disabled"
+            disabled
+            type="button"
+          >
+            카메라 기능 준비 중
+          </button>
+        </div>
+        <p className="helper-text guide-helper" id="camera-pending-note">
+          다음 단계에서 카메라를 연결할 예정이에요.
+        </p>
       </section>
+    </main>
+  )
+}
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+function App() {
+  const [currentScreen, setCurrentScreen] = useState('start')
+
+  return (
+    <div className="life4cut-app">
+      {currentScreen === 'start' ? (
+        <StartScreen onStart={() => setCurrentScreen('guide')} />
+      ) : (
+        <GuideScreen onBack={() => setCurrentScreen('start')} />
+      )}
+    </div>
   )
 }
 

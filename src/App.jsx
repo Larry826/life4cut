@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import oazLogo from './assets/oaz_logo.png'
 import './App.css'
+import FrameCustomizer from './components/FrameCustomizer'
 import { captureFrameFromVideo } from './utils/captureFrame'
 
 const TOTAL_SHOTS = 6
@@ -11,6 +12,12 @@ const COUNTDOWN_DURATION_MS = COUNTDOWN_SECONDS * COUNTDOWN_TICK_MS
 const PREPARATION_DELAY_MS = Math.max(SHOT_INTERVAL_MS - COUNTDOWN_DURATION_MS, 0)
 const FLASH_DURATION_MS = 200
 const REQUIRED_SELECTION_COUNT = 4
+const FRAME_MESSAGE_MAX_LENGTH = 24
+const DEFAULT_FRAME_COLOR = 'white'
+const DEFAULT_SHOW_FRAME_DATE = true
+const DEFAULT_FRAME_MESSAGE = ''
+const FRAME_SELECTION_ERROR_MESSAGE =
+  '선택한 사진 정보를 확인하지 못했어요.\n사진을 다시 선택해 주세요.'
 const CAPTURE_ERROR_MESSAGE =
   '사진을 촬영하지 못했어요.\n카메라 화면을 확인한 뒤 다시 시도해 주세요.'
 
@@ -528,10 +535,13 @@ function ReviewScreen({
 function SelectionPreviewScreen({
   isReconnectingCamera,
   onBackToReview,
+  onDecorateFrame,
   onRetake,
+  selectionNotice,
   selectedPhotos,
 }) {
   const cutLabels = ['첫 번째 컷', '두 번째 컷', '세 번째 컷', '네 번째 컷']
+  const canDecorateFrame = selectedPhotos.length === REQUIRED_SELECTION_COUNT
 
   return (
     <main className="screen selection-preview-screen">
@@ -543,6 +553,12 @@ function SelectionPreviewScreen({
             이 순서대로 최종 네컷에 배치될 예정이에요.
           </p>
         </div>
+
+        {selectionNotice && (
+          <div className="selection-preview-notice" role="alert">
+            <p>{selectionNotice}</p>
+          </div>
+        )}
 
         <div className="selected-strip-preview" aria-label="선택한 네컷 순서">
           {selectedPhotos.map((photo, index) => (
@@ -569,8 +585,13 @@ function SelectionPreviewScreen({
           >
             {isReconnectingCamera ? '카메라 다시 연결 중...' : '전체 다시 촬영'}
           </button>
-          <button className="button button-primary button-disabled" disabled type="button">
-            프레임 꾸미기 준비 중
+          <button
+            className="button button-primary"
+            disabled={isReconnectingCamera || !canDecorateFrame}
+            type="button"
+            onClick={onDecorateFrame}
+          >
+            프레임 꾸미기
           </button>
         </div>
         <p className="helper-text review-helper">
@@ -591,6 +612,10 @@ function App() {
   const [capturedPhotos, setCapturedPhotos] = useState([])
   const [selectedPhotoIds, setSelectedPhotoIds] = useState([])
   const [selectionNotice, setSelectionNotice] = useState('')
+  const [frameColor, setFrameColor] = useState(DEFAULT_FRAME_COLOR)
+  const [showFrameDate, setShowFrameDate] = useState(DEFAULT_SHOW_FRAME_DATE)
+  const [frameMessage, setFrameMessage] = useState(DEFAULT_FRAME_MESSAGE)
+  const [frameNotice, setFrameNotice] = useState('')
   const [currentShotIndex, setCurrentShotIndex] = useState(0)
   const [countdown, setCountdown] = useState(null)
   const [nextShotRemaining, setNextShotRemaining] = useState(null)
@@ -608,6 +633,13 @@ function App() {
   const capturedPhotosRef = useRef([])
   const captureTimeoutsRef = useRef(new Set())
   const captureSessionRef = useRef(0)
+  const selectedPhotos = selectedPhotoIds
+    .map((photoId) => capturedPhotos.find((photo) => photo.id === photoId))
+    .filter(Boolean)
+  const hasCompleteFrameSelection =
+    selectedPhotoIds.length === REQUIRED_SELECTION_COUNT &&
+    selectedPhotos.length === REQUIRED_SELECTION_COUNT &&
+    selectedPhotos.every((photo) => Boolean(photo.url))
 
   const clearCaptureTimers = useCallback(() => {
     captureTimeoutsRef.current.forEach((timer) => {
@@ -673,13 +705,21 @@ function App() {
     })
   }, [])
 
+  const resetFrameSettings = useCallback(() => {
+    setFrameColor(DEFAULT_FRAME_COLOR)
+    setShowFrameDate(DEFAULT_SHOW_FRAME_DATE)
+    setFrameMessage(DEFAULT_FRAME_MESSAGE)
+    setFrameNotice('')
+  }, [])
+
   const clearCapturedPhotos = useCallback(() => {
     revokePhotoUrls(capturedPhotosRef.current)
     capturedPhotosRef.current = []
     setCapturedPhotos([])
     setSelectedPhotoIds([])
     setSelectionNotice('')
-  }, [revokePhotoUrls])
+    resetFrameSettings()
+  }, [resetFrameSettings, revokePhotoUrls])
 
   const resetCaptureState = useCallback((options = {}) => {
     const { clearError = true } = options
@@ -1034,7 +1074,8 @@ function App() {
   }
 
   const handleCompleteSelection = () => {
-    if (selectedPhotoIds.length !== REQUIRED_SELECTION_COUNT) {
+    if (!hasCompleteFrameSelection) {
+      setSelectionNotice(FRAME_SELECTION_ERROR_MESSAGE)
       return
     }
 
@@ -1042,9 +1083,47 @@ function App() {
     setCurrentScreen('selectionPreview')
   }
 
-  const selectedPhotos = selectedPhotoIds
-    .map((photoId) => capturedPhotos.find((photo) => photo.id === photoId))
-    .filter(Boolean)
+  const handleOpenFrame = () => {
+    if (!hasCompleteFrameSelection) {
+      setSelectionNotice(FRAME_SELECTION_ERROR_MESSAGE)
+      setCurrentScreen('review')
+      return
+    }
+
+    setSelectionNotice('')
+    setFrameNotice('')
+    setCurrentScreen('frame')
+  }
+
+  const handleFrameMessageChange = (nextMessage) => {
+    const messageWithoutLineBreaks = nextMessage.replace(/[\r\n]/g, '')
+
+    setFrameMessage(messageWithoutLineBreaks)
+    setFrameNotice(
+      messageWithoutLineBreaks.length >= FRAME_MESSAGE_MAX_LENGTH
+        ? '하단 문구는 최대 24자까지 입력할 수 있어요.'
+        : '',
+    )
+  }
+
+  const handleBackToSelectionPreview = () => {
+    if (!hasCompleteFrameSelection) {
+      setSelectionNotice(FRAME_SELECTION_ERROR_MESSAGE)
+      setCurrentScreen('review')
+      return
+    }
+
+    setCurrentScreen('selectionPreview')
+  }
+
+  useEffect(() => {
+    if (currentScreen !== 'frame' || hasCompleteFrameSelection) {
+      return
+    }
+
+    setSelectionNotice(FRAME_SELECTION_ERROR_MESSAGE)
+    setCurrentScreen('review')
+  }, [currentScreen, hasCompleteFrameSelection])
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -1118,7 +1197,25 @@ function App() {
           isReconnectingCamera={isReconnectingCamera}
           selectedPhotos={selectedPhotos}
           onBackToReview={() => setCurrentScreen('review')}
+          onDecorateFrame={handleOpenFrame}
           onRetake={handleRetakeAll}
+          selectionNotice={selectionNotice}
+        />
+      )}
+
+      {currentScreen === 'frame' && (
+        <FrameCustomizer
+          brandHeader={<BrandHeader />}
+          frameColor={frameColor}
+          frameMessage={frameMessage}
+          frameNotice={frameNotice}
+          maxMessageLength={FRAME_MESSAGE_MAX_LENGTH}
+          selectedPhotos={selectedPhotos}
+          showDate={showFrameDate}
+          onBackToSelection={handleBackToSelectionPreview}
+          onFrameColorChange={setFrameColor}
+          onFrameMessageChange={handleFrameMessageChange}
+          onShowDateChange={setShowFrameDate}
         />
       )}
     </div>

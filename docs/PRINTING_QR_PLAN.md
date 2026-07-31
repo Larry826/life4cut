@@ -1,108 +1,134 @@
 # Printing and QR download plan
 
-## 목표 흐름
+## 현재 구현된 QR 다운로드 흐름
 
-1. 사용자가 최종 이미지를 완성한다.
-2. 인쇄하기 버튼을 누른다.
-3. 완성 PNG Blob을 임시 저장소에 업로드한다.
-4. 휴대폰에서 열 수 있는 다운로드 URL을 발급한다.
-5. 다운로드 URL을 QR 코드로 생성한다.
-6. 기존 네컷 이미지와 QR 코드를 인쇄 전용 Canvas에 합성한다.
-7. 인쇄 전용 이미지를 프린터로 전송한다.
-8. 사용자가 출력물의 QR을 휴대폰으로 촬영한다.
-9. 휴대폰에서 이미지를 확인하고 저장한다.
+1. 사용자가 결과 화면에서 `QR 출력하기`를 누른다.
+2. 브라우저가 완성 이미지 Blob을 QR 공유용 Blob으로 준비한다.
+3. QR 공유용 이미지가 4MB를 넘으면 같은 비율을 유지한 채 JPEG로 압축한다.
+4. 프론트엔드는 `/api/final-images`에 이미지를 업로드한다.
+5. Netlify Function이 이미지를 Netlify Blobs에 24시간 만료 metadata와 함께 저장한다.
+6. 서버가 `/download/{id}` 형태의 휴대폰 다운로드 페이지 URL을 반환한다.
+7. 프론트엔드는 다운로드 페이지 URL로 QR 이미지를 생성한다.
+8. QR 팝업에서 휴대폰으로 스캔할 수 있는 QR을 보여준다.
 
-## 현재 브라우저 메모리 구조의 한계
+이미지는 사용자가 `QR 출력하기`를 누른 뒤에만 서버에 업로드한다. 결과 화면 진입만으로는 업로드하지 않는다.
 
-- `blob:` Object URL은 현재 브라우저 세션 안에서만 사용할 수 있다.
-- 다른 휴대폰에서 현재 태블릿의 Object URL을 열 수 없다.
-- QR 코드에는 휴대폰에서 접근 가능한 HTTPS URL이 필요하다.
-- 따라서 임시 이미지 저장소와 다운로드 endpoint가 필요하다.
+## Netlify Functions와 Blobs
 
-## 저장소 후보
+임시 저장소는 Netlify Blobs를 사용한다.
 
-프로젝트가 Netlify에 배포될 예정이므로 우선 후보는 다음 구조다.
+- Store 이름: `life4cut-final-images`
+- Blob key: `crypto.randomUUID()`로 만든 예측하기 어려운 id
+- Metadata:
+  - `contentType`
+  - `filename`
+  - `createdAt`
+  - `expiresAt`
+- 만료 시간: 업로드 시점부터 24시간
 
-- Netlify Function에서 최종 PNG 업로드 수신
-- Netlify Blobs에 이미지 임시 저장
-- 고유한 무작위 id 생성
-- `/download/:id` 같은 다운로드 endpoint 제공
-- QR에는 해당 HTTPS 주소 저장
+비밀키, Netlify 토큰, Site ID는 코드나 Git에 저장하지 않는다.
 
-다른 후보로 Supabase Storage의 public URL 또는 만료되는 signed URL도 검토할 수 있다.
+## API 경로
 
-이번 단계에서는 어느 저장소도 실제로 연결하지 않는다.
+### 업로드 API
 
-## 개인정보 및 만료 정책
+- Function: `netlify/functions/upload-final-image.mjs`
+- Path: `/api/final-images`
+- Method: `POST`
+- Body: `image/png` 또는 `image/jpeg`
+- 최대 요청 크기: 약 4.2MB
+- code-based rate limit: IP와 domain 기준 60초에 12회
+- 성공 응답:
 
-추후 구현 전에 다음을 결정해야 한다.
+```json
+{
+  "id": "uuid",
+  "pageUrl": "https://example.netlify.app/download/uuid",
+  "expiresAt": "2026-07-31T12:00:00.000Z"
+}
+```
 
-- 이미지 보관 시간
-- 예: 1시간, 24시간, 7일
-- 만료 후 이미지 삭제 방식
-- URL을 아는 사람만 접근할 수 있게 할지
-- signed URL을 사용할지
-- 사용자의 업로드 및 보관 동의 문구
-- 업로드 실패 시 인쇄를 막을지 또는 QR 없이 인쇄할지
+### 이미지 제공 API
 
-권장 기본 정책:
+- Function: `netlify/functions/get-final-image.mjs`
+- Path: `/api/final-images/:id`
+- Method: `GET`
+- 일반 보기: `/api/final-images/{id}`
+- 다운로드: `/api/final-images/{id}?download=1`
 
-- 추측하기 어려운 무작위 id 사용
-- 짧은 기간만 저장
-- 일정 시간 후 삭제
-- 이미지 검색이나 목록 조회 기능 제공하지 않음
-- QR 주소를 가진 사용자만 접근
+만료된 이미지는 요청 시 즉시 삭제하고 `410`을 반환한다.
+
+### 휴대폰 다운로드 페이지
+
+- Function: `netlify/functions/download-final-image.mjs`
+- Path: `/download/:id`
+- Method: `GET`
+
+React 앱을 다시 실행하지 않고, Function이 독립적인 HTML 페이지를 반환한다. 페이지에는 이미지 미리보기, `이미지 저장하기` 버튼, 24시간 만료 안내, 길게 눌러 저장 안내가 포함된다.
 
 ## QR 생성
 
-- QR에는 이미지 자체 데이터가 아니라 다운로드 HTTPS URL을 넣는다.
-- QR 생성 라이브러리는 실제 구현 단계에서 결정한다.
-- QR은 충분한 흰색 quiet zone을 가진다.
-- 인쇄 해상도에서 스캔 가능한 최소 크기를 확인한다.
-- QR 영역이 실제 사진을 가리지 않게 한다.
+QR은 이미지 Blob URL이나 Vite 로컬 URL이 아니라 서버가 반환한 다운로드 페이지 URL을 포함한다.
 
-## 프린터 연결
+프론트엔드에서는 `qrcode` 패키지의 `QRCode.toDataURL()`을 사용한다.
 
-프린터 모델이 정해진 뒤 다음을 확인한다.
+```js
+QRCode.toDataURL(pageUrl, {
+  errorCorrectionLevel: 'M',
+  width: 320,
+  margin: 4,
+  color: {
+    dark: '#211822',
+    light: '#ffffff',
+  },
+})
+```
 
-- 태블릿 운영체제
-- 브라우저 종류
-- 프린터 연결 방식
-- Bluetooth Low Energy인지
-- Bluetooth Classic인지
-- USB 연결도 지원하는지
-- 제조사가 웹 SDK 또는 앱 SDK를 제공하는지
-- 인쇄 명령 형식
-- 지원 이미지 형식과 해상도
-- 용지 폭
+## QR 공유용 이미지 압축
+
+기존 고해상도 PNG 생성 로직은 `src/utils/renderFinalStrip.js`에 유지한다. 이 PNG는 최종 이미지의 원본 데이터로 계속 사용한다.
+
+서버 업로드 한도에 안전하게 맞추기 위해 QR 공유용 Blob은 별도 유틸에서 만든다.
+
+- Utility: `src/utils/createShareImageBlob.js`
+- 4MB 이하 PNG/JPEG는 그대로 사용
+- 4MB를 넘으면 같은 비율로 Canvas에 다시 그리고 JPEG로 압축
+- 필요한 경우 폭을 900px, 820px, 720px 순서로 줄여 시도
+- 이미지 비율은 변경하지 않음
+
+따라서 QR 다운로드용 이미지는 JPEG가 될 수 있지만, 최종 합성 PNG 생성 로직 자체는 변경하지 않는다.
+
+## 만료 이미지 정리
+
+- Function: `netlify/functions/cleanup-expired-images.mjs`
+- Schedule: `@hourly`
+
+정리 함수는 `life4cut-final-images` store를 순회하면서 metadata의 `expiresAt`이 지난 Blob만 삭제한다. 특정 항목 조회에 실패해도 다른 항목 정리는 계속한다.
+
+다운로드와 이미지 제공 Function도 요청된 이미지가 만료됐으면 즉시 삭제한다.
+
+## 개인정보 정책
+
+서버에 저장되는 이미지는 개인 사진일 수 있으므로 다음 원칙을 유지한다.
+
+- 사용자가 직접 QR 출력을 누른 경우에만 업로드
+- 이미지 목록 조회 화면 제공 안 함
+- 추측하기 어려운 UUID URL 사용
+- 24시간 후 자동 삭제
+- URL을 아는 사용자만 접근 가능
+
+## 인쇄 기능 상태
+
+`인쇄하기` 버튼은 결과 화면에 표시되지만 현재 disabled 상태다. 실제 프린터 연결은 아직 구현하지 않는다.
+
+프린터 모델이 결정되면 다음 정보가 필요하다.
+
+- 제조사와 정확한 모델명
+- 태블릿 운영체제와 브라우저
+- 연결 방식: Bluetooth, USB, Wi-Fi, 제조사 앱 또는 SDK
+- 용지 폭과 해상도
+- 컬러/흑백 지원 여부
 - 자동 절단 지원 여부
+- Web Bluetooth 또는 Web Serial 사용 가능 여부
 
-가능한 방식:
-
-1. 운영체제 인쇄 서비스와 브라우저 인쇄창
-2. 제조사 앱 또는 SDK
-3. Web Bluetooth를 통한 BLE GATT 통신
-4. 데스크톱 Chromium 환경의 Web Serial
-5. 별도 로컬 인쇄 중계 앱
-
-정확한 방식은 프린터 모델이 결정된 후 선택한다.
-
-## 인쇄 전용 이미지
-
-- 현재 저장 PNG와 인쇄 PNG를 분리할 수 있다.
-- 화면용/다운로드용 이미지는 QR 없이 유지할 수 있다.
-- 인쇄 버튼을 누를 때만 QR을 포함한 print 전용 Canvas를 생성한다.
-- QR 위치와 크기는 용지 규격을 기준으로 결정한다.
-- 기존 `renderFinalStrip` 유틸을 직접 훼손하지 않고 별도 `renderPrintableStrip` 유틸을 만드는 방식을 고려한다.
-- QR은 최종 출력물 오른쪽 위의 별도 QR 전용 여백이나 헤더 영역에 배치하고, 사진 위에 바로 덮지 않는다.
-
-## 구현 전 필요한 정보
-
-- 구매할 프린터의 제조사와 정확한 모델명
-- 사용할 태블릿의 운영체제와 모델
-- 사용하는 브라우저
-- 용지 규격
-- 컬러 또는 흑백 인쇄 여부
-- 인쇄 품질과 해상도
-- QR 이미지 보관 시간
-- 인터넷 연결이 항상 가능한지
+인쇄 단계에서는 QR을 포함한 별도 print 전용 이미지를 만들지, 현재 완성 이미지를 그대로 출력할지 결정해야 한다.

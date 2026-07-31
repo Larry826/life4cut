@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import QRCode from 'qrcode'
 import oazLogo from './assets/oaz_logo.png'
 import './App.css'
 import FinalResultScreen from './components/FinalResultScreen'
@@ -11,6 +12,7 @@ import {
   formatLocalFrameDate,
 } from './constants/frameOptions'
 import { captureFrameFromVideo } from './utils/captureFrame'
+import { createShareImageBlob } from './utils/createShareImageBlob'
 import { renderFinalStrip } from './utils/renderFinalStrip'
 
 const TOTAL_SHOTS = 6
@@ -27,6 +29,8 @@ const FINAL_IMAGE_ERROR_MESSAGE =
   '완성 이미지를 만들지 못했어요.\n사진과 프레임 설정을 확인한 뒤 다시 시도해 주세요.'
 const CAPTURE_ERROR_MESSAGE =
   '사진을 촬영하지 못했어요.\n카메라 화면을 확인한 뒤 다시 시도해 주세요.'
+const QR_SHARE_ERROR_MESSAGE =
+  'QR을 준비하지 못했어요.\n인터넷 연결을 확인한 뒤 다시 시도해 주세요.'
 
 const guideItems = [
   {
@@ -86,14 +90,24 @@ function getCameraErrorMessage(error) {
   return '카메라를 연결하지 못했어요.\n잠시 후 다시 시도해 주세요.'
 }
 
-function createFinalImageFileName(date = new Date()) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  const hours = String(date.getHours()).padStart(2, '0')
-  const minutes = String(date.getMinutes()).padStart(2, '0')
+function normalizeSharePageUrl(pageUrl) {
+  if (typeof pageUrl !== 'string' || pageUrl.trim().length === 0) {
+    throw new Error('Share page URL is missing')
+  }
 
-  return `OAZ_Life4Cut_${year}${month}${day}_${hours}${minutes}.png`
+  const normalizedUrl = new URL(pageUrl, window.location.origin)
+  const isLocalhost =
+    normalizedUrl.hostname === 'localhost' || normalizedUrl.hostname === '127.0.0.1'
+
+  if (
+    normalizedUrl.protocol === 'blob:' ||
+    (normalizedUrl.protocol !== 'https:' &&
+      !(normalizedUrl.protocol === 'http:' && isLocalhost))
+  ) {
+    throw new Error('Invalid share page URL')
+  }
+
+  return normalizedUrl.href
 }
 
 function BrandHeader({ logoSize = 'compact' }) {
@@ -637,6 +651,13 @@ function App() {
   const [finalImageUrl, setFinalImageUrl] = useState('')
   const [isRenderingFinalImage, setIsRenderingFinalImage] = useState(false)
   const [finalImageError, setFinalImageError] = useState('')
+  const [isUploadingShareImage, setIsUploadingShareImage] = useState(false)
+  const [sharedImageId, setSharedImageId] = useState('')
+  const [sharedImagePageUrl, setSharedImagePageUrl] = useState('')
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState('')
+  const [sharedImageExpiresAt, setSharedImageExpiresAt] = useState('')
+  const [isQrDialogOpen, setIsQrDialogOpen] = useState(false)
+  const [qrShareError, setQrShareError] = useState('')
   const [currentShotIndex, setCurrentShotIndex] = useState(0)
   const [countdown, setCountdown] = useState(null)
   const [nextShotRemaining, setNextShotRemaining] = useState(null)
@@ -651,6 +672,7 @@ function App() {
   const [isSwitchingCamera, setIsSwitchingCamera] = useState(false)
   const streamRef = useRef(null)
   const videoRef = useRef(null)
+  const qrButtonRef = useRef(null)
   const capturedPhotosRef = useRef([])
   const finalImageUrlRef = useRef('')
   const captureTimeoutsRef = useRef(new Set())
@@ -728,8 +750,20 @@ function App() {
     })
   }, [])
 
+  const resetQrShareState = useCallback(() => {
+    setIsUploadingShareImage(false)
+    setSharedImageId('')
+    setSharedImagePageUrl('')
+    setQrCodeDataUrl('')
+    setSharedImageExpiresAt('')
+    setIsQrDialogOpen(false)
+    setQrShareError('')
+  }, [])
+
   const clearFinalImage = useCallback((options = {}) => {
     const { clearError = true } = options
+
+    resetQrShareState()
 
     if (finalImageUrlRef.current) {
       URL.revokeObjectURL(finalImageUrlRef.current)
@@ -742,7 +776,7 @@ function App() {
     if (clearError) {
       setFinalImageError('')
     }
-  }, [])
+  }, [resetQrShareState])
 
   const resetFrameSettings = useCallback(() => {
     setFrameColor(DEFAULT_FRAME_COLOR)
@@ -1186,22 +1220,68 @@ function App() {
     }
   }
 
-  const handleDownloadFinalImage = () => {
-    if (!finalImageUrl) {
+  const handleCloseQrDialog = useCallback(() => {
+    setIsQrDialogOpen(false)
+
+    window.requestAnimationFrame(() => {
+      qrButtonRef.current?.focus()
+    })
+  }, [])
+
+  const handleOpenQrShare = async () => {
+    if (!finalImageBlob || isUploadingShareImage) {
       return
     }
 
-    const downloadLink = document.createElement('a')
-    downloadLink.href = finalImageUrl
-    downloadLink.download = createFinalImageFileName()
-    document.body.append(downloadLink)
-    downloadLink.click()
-    downloadLink.remove()
-  }
+    if (sharedImageId && sharedImagePageUrl && qrCodeDataUrl) {
+      setQrShareError('')
+      setIsQrDialogOpen(true)
+      return
+    }
 
-  const handleBackToFrameFromResult = () => {
-    clearFinalImage()
-    setCurrentScreen('frame')
+    setIsUploadingShareImage(true)
+    setQrShareError('')
+
+    try {
+      const shareImageBlob = await createShareImageBlob(finalImageBlob, finalImageUrl)
+      const response = await fetch('/api/final-images', {
+        method: 'POST',
+        headers: {
+          'Content-Type': shareImageBlob.type || 'image/png',
+        },
+        body: shareImageBlob,
+      })
+      const payload = await response.json()
+
+      if (!response.ok) {
+        throw new Error('Upload failed')
+      }
+
+      if (typeof payload?.id !== 'string' || payload.id.length === 0) {
+        throw new Error('Share image id is missing')
+      }
+
+      const pageUrl = normalizeSharePageUrl(payload?.pageUrl)
+      const nextQrCodeDataUrl = await QRCode.toDataURL(pageUrl, {
+        errorCorrectionLevel: 'M',
+        width: 320,
+        margin: 4,
+        color: {
+          dark: '#211822',
+          light: '#ffffff',
+        },
+      })
+
+      setSharedImageId(payload.id)
+      setSharedImagePageUrl(pageUrl)
+      setSharedImageExpiresAt(payload?.expiresAt ?? '')
+      setQrCodeDataUrl(nextQrCodeDataUrl)
+      setIsQrDialogOpen(true)
+    } catch {
+      setQrShareError(QR_SHARE_ERROR_MESSAGE)
+    } finally {
+      setIsUploadingShareImage(false)
+    }
   }
 
   const handleBackToSelectionPreview = () => {
@@ -1322,11 +1402,17 @@ function App() {
 
       {currentScreen === 'result' && (
         <FinalResultScreen
-          brandHeader={<BrandHeader />}
           finalImageUrl={finalImageUrl}
           hasFinalImage={hasFinalImage}
-          onBackToFrame={handleBackToFrameFromResult}
-          onDownload={handleDownloadFinalImage}
+          isQrDialogOpen={isQrDialogOpen}
+          isUploadingShareImage={isUploadingShareImage}
+          qrButtonRef={qrButtonRef}
+          qrCodeDataUrl={qrCodeDataUrl}
+          qrShareError={qrShareError}
+          sharedImageExpiresAt={sharedImageExpiresAt}
+          sharedImagePageUrl={sharedImagePageUrl}
+          onCloseQrDialog={handleCloseQrDialog}
+          onOpenQrShare={handleOpenQrShare}
           onStartOver={handleBackToStart}
         />
       )}

@@ -1,27 +1,86 @@
+import QrDownloadDialog from './QrDownloadDialog'
+
 function FinalResultScreen({
   finalImageUrl,
   hasFinalImage,
-  onBackToFrame,
-  onDownload,
+  isQrDialogOpen,
+  isUploadingShareImage,
+  qrButtonRef,
+  qrCodeDataUrl,
+  qrShareError,
+  sharedImageExpiresAt,
+  sharedImagePageUrl,
+  onCloseQrDialog,
+  onOpenQrShare,
   onStartOver,
 }) {
+  const canOpenQrShare = hasFinalImage && !isUploadingShareImage
+  const hasQrDialogData = Boolean(qrCodeDataUrl && sharedImagePageUrl)
+
   return (
-    <main className="screen result-screen">
-      <section className="result-content" aria-labelledby="result-title">
-        <div className="result-main-layout">
-          <div className="result-copy-panel">
+    <main className="screen result-page">
+      <section className="result-screen" aria-labelledby="result-title">
+        <div className="result-layout">
+          <aside className="result-control-panel">
             <p className="result-brand-label">OAZ_인생네컷</p>
-            <h1 id="result-title">
-              네컷 이미지가
+            <h1 id="result-title">네컷 이미지가 완성됐어요</h1>
+            <p className="screen-description">완성된 네컷을 확인해 주세요.</p>
+
+            <div className="result-primary-actions">
+              <button
+                className="button button-primary"
+                disabled={!canOpenQrShare}
+                ref={qrButtonRef}
+                type="button"
+                onClick={onOpenQrShare}
+              >
+                {isUploadingShareImage ? 'QR 준비 중...' : 'QR 출력하기'}
+              </button>
+              <button
+                aria-describedby="print-feature-note"
+                className="button button-secondary"
+                disabled
+                type="button"
+              >
+                인쇄하기
+              </button>
+              <button className="button button-secondary" type="button" onClick={onStartOver}>
+                처음으로 돌아가기
+              </button>
+            </div>
+
+            <p className="helper-text result-privacy-note">
+              QR 기능을 사용하면 완성 이미지가 다운로드를 위해
               <br />
-              완성됐어요
-            </h1>
-            <p className="screen-description">
-              완성된 네컷을 확인해 주세요.
-              <br />
-              인쇄하거나 프레임을 다시 수정할 수 있어요.
+              서버에 24시간 동안 임시 저장돼요.
             </p>
-          </div>
+
+            <p className="helper-text result-print-note" id="print-feature-note">
+              프린터 연결 후 사용할 수 있어요.
+            </p>
+
+            <div className="qr-status-area" aria-live="polite">
+              {isUploadingShareImage && <p>서버에 이미지를 임시 저장하고 있어요.</p>}
+              {!isUploadingShareImage && sharedImagePageUrl && (
+                <p>QR 다운로드 페이지가 준비됐어요.</p>
+              )}
+            </div>
+
+            {qrShareError && (
+              <div className="qr-share-alert" role="alert">
+                <p>{qrShareError}</p>
+              </div>
+            )}
+
+            {hasQrDialogData && (
+              <QrDownloadDialog
+                expiresAt={sharedImageExpiresAt}
+                isOpen={isQrDialogOpen}
+                qrCodeDataUrl={qrCodeDataUrl}
+                onClose={onCloseQrDialog}
+              />
+            )}
+          </aside>
 
           <div className="result-image-panel" aria-label="완성된 네컷 이미지 미리보기">
             {hasFinalImage ? (
@@ -36,42 +95,6 @@ function FinalResultScreen({
               </div>
             )}
           </div>
-        </div>
-
-        <div className="result-action-panel">
-          <div className="result-primary-actions">
-            <button
-              aria-describedby="print-feature-note"
-              className="button button-primary"
-              disabled
-              type="button"
-            >
-              인쇄하기
-            </button>
-            <button className="button button-secondary" type="button" onClick={onBackToFrame}>
-              프레임 다시 꾸미기
-            </button>
-            <button className="button button-secondary" type="button" onClick={onStartOver}>
-              처음부터 다시 촬영
-            </button>
-          </div>
-
-          <p className="helper-text result-print-note" id="print-feature-note">
-            프린터 연결과 QR 다운로드 기능은 다음 단계에서 추가할 예정이에요.
-          </p>
-
-          <button
-            className="button button-secondary result-download-button"
-            disabled={!hasFinalImage}
-            type="button"
-            onClick={onDownload}
-          >
-            PNG 파일로 저장
-          </button>
-          <p className="helper-text result-helper">
-            모바일 브라우저에서는 이미지가 새 화면에 열리면 이미지를 길게 눌러 저장해
-            주세요.
-          </p>
         </div>
       </section>
     </main>

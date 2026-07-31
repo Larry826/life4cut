@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import oazLogo from './assets/oaz_logo.png'
 import './App.css'
+import FinalResultScreen from './components/FinalResultScreen'
 import FrameCustomizer from './components/FrameCustomizer'
+import {
+  DEFAULT_FRAME_COLOR,
+  DEFAULT_FRAME_INPUT_MESSAGE,
+  DEFAULT_SHOW_FRAME_DATE,
+  FRAME_MESSAGE_MAX_LENGTH,
+  formatLocalFrameDate,
+} from './constants/frameOptions'
 import { captureFrameFromVideo } from './utils/captureFrame'
+import { renderFinalStrip } from './utils/renderFinalStrip'
 
 const TOTAL_SHOTS = 6
 const SHOT_INTERVAL_MS = 5000
@@ -12,12 +21,10 @@ const COUNTDOWN_DURATION_MS = COUNTDOWN_SECONDS * COUNTDOWN_TICK_MS
 const PREPARATION_DELAY_MS = Math.max(SHOT_INTERVAL_MS - COUNTDOWN_DURATION_MS, 0)
 const FLASH_DURATION_MS = 200
 const REQUIRED_SELECTION_COUNT = 4
-const FRAME_MESSAGE_MAX_LENGTH = 24
-const DEFAULT_FRAME_COLOR = 'white'
-const DEFAULT_SHOW_FRAME_DATE = true
-const DEFAULT_FRAME_MESSAGE = ''
 const FRAME_SELECTION_ERROR_MESSAGE =
   '선택한 사진 정보를 확인하지 못했어요.\n사진을 다시 선택해 주세요.'
+const FINAL_IMAGE_ERROR_MESSAGE =
+  '완성 이미지를 만들지 못했어요.\n사진과 프레임 설정을 확인한 뒤 다시 시도해 주세요.'
 const CAPTURE_ERROR_MESSAGE =
   '사진을 촬영하지 못했어요.\n카메라 화면을 확인한 뒤 다시 시도해 주세요.'
 
@@ -77,6 +84,16 @@ function getCameraErrorMessage(error) {
   }
 
   return '카메라를 연결하지 못했어요.\n잠시 후 다시 시도해 주세요.'
+}
+
+function createFinalImageFileName(date = new Date()) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+
+  return `OAZ_Life4Cut_${year}${month}${day}_${hours}${minutes}.png`
 }
 
 function BrandHeader({ logoSize = 'compact' }) {
@@ -614,8 +631,12 @@ function App() {
   const [selectionNotice, setSelectionNotice] = useState('')
   const [frameColor, setFrameColor] = useState(DEFAULT_FRAME_COLOR)
   const [showFrameDate, setShowFrameDate] = useState(DEFAULT_SHOW_FRAME_DATE)
-  const [frameMessage, setFrameMessage] = useState(DEFAULT_FRAME_MESSAGE)
+  const [frameMessage, setFrameMessage] = useState(DEFAULT_FRAME_INPUT_MESSAGE)
   const [frameNotice, setFrameNotice] = useState('')
+  const [finalImageBlob, setFinalImageBlob] = useState(null)
+  const [finalImageUrl, setFinalImageUrl] = useState('')
+  const [isRenderingFinalImage, setIsRenderingFinalImage] = useState(false)
+  const [finalImageError, setFinalImageError] = useState('')
   const [currentShotIndex, setCurrentShotIndex] = useState(0)
   const [countdown, setCountdown] = useState(null)
   const [nextShotRemaining, setNextShotRemaining] = useState(null)
@@ -631,6 +652,7 @@ function App() {
   const streamRef = useRef(null)
   const videoRef = useRef(null)
   const capturedPhotosRef = useRef([])
+  const finalImageUrlRef = useRef('')
   const captureTimeoutsRef = useRef(new Set())
   const captureSessionRef = useRef(0)
   const selectedPhotos = selectedPhotoIds
@@ -640,6 +662,7 @@ function App() {
     selectedPhotoIds.length === REQUIRED_SELECTION_COUNT &&
     selectedPhotos.length === REQUIRED_SELECTION_COUNT &&
     selectedPhotos.every((photo) => Boolean(photo.url))
+  const hasFinalImage = Boolean(finalImageBlob && finalImageUrl)
 
   const clearCaptureTimers = useCallback(() => {
     captureTimeoutsRef.current.forEach((timer) => {
@@ -705,10 +728,26 @@ function App() {
     })
   }, [])
 
+  const clearFinalImage = useCallback((options = {}) => {
+    const { clearError = true } = options
+
+    if (finalImageUrlRef.current) {
+      URL.revokeObjectURL(finalImageUrlRef.current)
+      finalImageUrlRef.current = ''
+    }
+
+    setFinalImageBlob(null)
+    setFinalImageUrl('')
+
+    if (clearError) {
+      setFinalImageError('')
+    }
+  }, [])
+
   const resetFrameSettings = useCallback(() => {
     setFrameColor(DEFAULT_FRAME_COLOR)
     setShowFrameDate(DEFAULT_SHOW_FRAME_DATE)
-    setFrameMessage(DEFAULT_FRAME_MESSAGE)
+    setFrameMessage(DEFAULT_FRAME_INPUT_MESSAGE)
     setFrameNotice('')
   }, [])
 
@@ -718,8 +757,9 @@ function App() {
     setCapturedPhotos([])
     setSelectedPhotoIds([])
     setSelectionNotice('')
+    clearFinalImage()
     resetFrameSettings()
-  }, [resetFrameSettings, revokePhotoUrls])
+  }, [clearFinalImage, resetFrameSettings, revokePhotoUrls])
 
   const resetCaptureState = useCallback((options = {}) => {
     const { clearError = true } = options
@@ -780,6 +820,10 @@ function App() {
       clearCaptureTimers()
       revokePhotoUrls(capturedPhotosRef.current)
       capturedPhotosRef.current = []
+      if (finalImageUrlRef.current) {
+        URL.revokeObjectURL(finalImageUrlRef.current)
+        finalImageUrlRef.current = ''
+      }
       stopCameraStream({ updateState: false })
     }
   }, [clearCaptureTimers, revokePhotoUrls, stopCameraStream])
@@ -1106,6 +1150,60 @@ function App() {
     )
   }
 
+  const handleCreateFinalImage = async () => {
+    if (isRenderingFinalImage) {
+      return
+    }
+
+    if (!hasCompleteFrameSelection) {
+      setFinalImageError(FINAL_IMAGE_ERROR_MESSAGE)
+      return
+    }
+
+    setIsRenderingFinalImage(true)
+    setFinalImageError('')
+    clearFinalImage({ clearError: false })
+
+    try {
+      const pngBlob = await renderFinalStrip({
+        photos: selectedPhotos,
+        frameColor,
+        showDate: showFrameDate,
+        frameMessage,
+        dateText: formatLocalFrameDate(),
+      })
+      const pngUrl = URL.createObjectURL(pngBlob)
+
+      finalImageUrlRef.current = pngUrl
+      setFinalImageBlob(pngBlob)
+      setFinalImageUrl(pngUrl)
+      setCurrentScreen('result')
+    } catch {
+      clearFinalImage({ clearError: false })
+      setFinalImageError(FINAL_IMAGE_ERROR_MESSAGE)
+    } finally {
+      setIsRenderingFinalImage(false)
+    }
+  }
+
+  const handleDownloadFinalImage = () => {
+    if (!finalImageUrl) {
+      return
+    }
+
+    const downloadLink = document.createElement('a')
+    downloadLink.href = finalImageUrl
+    downloadLink.download = createFinalImageFileName()
+    document.body.append(downloadLink)
+    downloadLink.click()
+    downloadLink.remove()
+  }
+
+  const handleBackToFrameFromResult = () => {
+    clearFinalImage()
+    setCurrentScreen('frame')
+  }
+
   const handleBackToSelectionPreview = () => {
     if (!hasCompleteFrameSelection) {
       setSelectionNotice(FRAME_SELECTION_ERROR_MESSAGE)
@@ -1209,13 +1307,27 @@ function App() {
           frameColor={frameColor}
           frameMessage={frameMessage}
           frameNotice={frameNotice}
+          finalImageError={finalImageError}
+          isRenderingFinalImage={isRenderingFinalImage}
           maxMessageLength={FRAME_MESSAGE_MAX_LENGTH}
           selectedPhotos={selectedPhotos}
           showDate={showFrameDate}
           onBackToSelection={handleBackToSelectionPreview}
+          onCreateFinalImage={handleCreateFinalImage}
           onFrameColorChange={setFrameColor}
           onFrameMessageChange={handleFrameMessageChange}
           onShowDateChange={setShowFrameDate}
+        />
+      )}
+
+      {currentScreen === 'result' && (
+        <FinalResultScreen
+          brandHeader={<BrandHeader />}
+          finalImageUrl={finalImageUrl}
+          hasFinalImage={hasFinalImage}
+          onBackToFrame={handleBackToFrameFromResult}
+          onDownload={handleDownloadFinalImage}
+          onStartOver={handleBackToStart}
         />
       )}
     </div>

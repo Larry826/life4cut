@@ -1,55 +1,17 @@
-const DEFAULT_FRAME_MESSAGE = 'OAZ LIFE4CUT'
-
-const FRAME_OPTIONS = [
-  {
-    id: 'white',
-    label: '화이트',
-    background: '#ffffff',
-    foreground: '#211822',
-    border: '#e7dfe8',
-  },
-  {
-    id: 'black',
-    label: '블랙',
-    background: '#18141a',
-    foreground: '#ffffff',
-    border: '#342b36',
-  },
-  {
-    id: 'purple',
-    label: '퍼플',
-    background: '#76518f',
-    foreground: '#ffffff',
-    border: '#5b3970',
-  },
-  {
-    id: 'pink',
-    label: '핑크',
-    background: '#f3a6cb',
-    foreground: '#3b2330',
-    border: '#db79ad',
-  },
-]
+import {
+  FRAME_BRAND_MESSAGE,
+  FRAME_OPTIONS,
+  formatLocalFrameDate,
+  getFrameOption,
+} from '../constants/frameOptions'
 
 const cutOrderLabels = ['첫 번째', '두 번째', '세 번째', '네 번째']
-
-function formatLocalFrameDate(date = new Date()) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-
-  return `${year}.${month}.${day}`
-}
-
-function getFrameOption(frameColor) {
-  return FRAME_OPTIONS.find((option) => option.id === frameColor) ?? FRAME_OPTIONS[0]
-}
 
 function PhotoStripPreview({ frameColor, frameMessage, selectedPhotos, showDate }) {
   const frameOption = getFrameOption(frameColor)
   const trimmedMessage = frameMessage.trim()
   const hasCustomMessage = trimmedMessage.length > 0
-  const previewMessage = hasCustomMessage ? trimmedMessage : DEFAULT_FRAME_MESSAGE
+  const previewMessage = hasCustomMessage ? trimmedMessage : FRAME_BRAND_MESSAGE
   const formattedDate = formatLocalFrameDate()
 
   return (
@@ -76,7 +38,7 @@ function PhotoStripPreview({ frameColor, frameMessage, selectedPhotos, showDate 
         <p className="frame-strip-message" title={previewMessage}>
           {previewMessage}
         </p>
-        {hasCustomMessage && <p className="frame-strip-brand">OAZ LIFE4CUT</p>}
+        {hasCustomMessage && <p className="frame-strip-brand">{FRAME_BRAND_MESSAGE}</p>}
         {showDate && <p className="frame-strip-date">{formattedDate}</p>}
       </figcaption>
     </figure>
@@ -119,8 +81,11 @@ function FrameCustomizer({
   frameColor,
   frameMessage,
   frameNotice,
+  finalImageError,
+  isRenderingFinalImage,
   maxMessageLength,
   onBackToSelection,
+  onCreateFinalImage,
   onFrameColorChange,
   onFrameMessageChange,
   onShowDateChange,
@@ -231,14 +196,28 @@ function FrameCustomizer({
               )}
             </div>
 
+            {finalImageError && (
+              <div className="frame-render-alert" role="alert">
+                <p>{finalImageError}</p>
+              </div>
+            )}
+
             <div className="frame-actions">
               <button className="button button-secondary" type="button" onClick={onBackToSelection}>
                 사진 선택으로 돌아가기
               </button>
-              <button className="button button-primary button-disabled" disabled type="button">
-                최종 이미지 만들기 준비 중
+              <button
+                className="button button-primary"
+                disabled={isRenderingFinalImage}
+                type="button"
+                onClick={onCreateFinalImage}
+              >
+                {isRenderingFinalImage ? '이미지 만드는 중...' : '최종 이미지 만들기'}
               </button>
             </div>
+            <p className="sr-only" aria-live="polite">
+              {isRenderingFinalImage ? '완성 이미지를 만들고 있습니다.' : ''}
+            </p>
             <p className="helper-text frame-helper">
               다음 단계에서 완성된 네컷 이미지를 저장할 수 있어요.
             </p>

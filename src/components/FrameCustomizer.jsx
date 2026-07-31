@@ -4,6 +4,7 @@ import {
   formatLocalFrameDate,
   getFrameOption,
 } from '../constants/frameOptions'
+import oazLogo from '../assets/oaz_logo.png'
 
 const cutOrderLabels = ['첫 번째', '두 번째', '세 번째', '네 번째']
 
@@ -13,14 +14,17 @@ function PhotoStripPreview({ frameColor, frameMessage, selectedPhotos, showDate 
   const hasCustomMessage = trimmedMessage.length > 0
   const previewMessage = hasCustomMessage ? trimmedMessage : FRAME_BRAND_MESSAGE
   const formattedDate = formatLocalFrameDate()
+  const isOazFrame = frameOption.id === 'oaz'
 
   return (
     <figure
-      className="frame-strip"
+      className={`frame-strip frame-strip-${frameOption.id}`}
       style={{
         '--frame-background': frameOption.background,
         '--frame-border': frameOption.border,
         '--frame-foreground': frameOption.foreground,
+        '--frame-accent': frameOption.accent,
+        '--frame-soft-accent': frameOption.softAccent,
       }}
       aria-label={`${frameOption.label} 프레임으로 꾸민 세로 네컷 미리보기`}
     >
@@ -35,10 +39,17 @@ function PhotoStripPreview({ frameColor, frameMessage, selectedPhotos, showDate 
         ))}
       </div>
       <figcaption className="frame-strip-footer">
+        {isOazFrame && (
+          <span className="frame-strip-logo-card">
+            <img className="frame-strip-logo" src={oazLogo} alt="OAZ 학회 로고" />
+          </span>
+        )}
         <p className="frame-strip-message" title={previewMessage}>
           {previewMessage}
         </p>
-        {hasCustomMessage && <p className="frame-strip-brand">{FRAME_BRAND_MESSAGE}</p>}
+        {hasCustomMessage && !isOazFrame && (
+          <p className="frame-strip-brand">{FRAME_BRAND_MESSAGE}</p>
+        )}
         {showDate && <p className="frame-strip-date">{formattedDate}</p>}
       </figcaption>
     </figure>

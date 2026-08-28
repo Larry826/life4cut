@@ -1,18 +1,21 @@
 import { FRAME_BRAND_MESSAGE, getFrameOption } from '../constants/frameOptions'
-import oazLogo from '../assets/oaz_logo.png'
 
 const REQUIRED_PHOTO_COUNT = 4
 const CANVAS_WIDTH = 900
 const SIDE_PADDING = 54
-const TOP_PADDING = 54
+const TOP_PADDING = 244
 const PHOTO_GAP = 18
 const PHOTO_WIDTH = CANVAS_WIDTH - SIDE_PADDING * 2
-const PHOTO_HEIGHT = Math.round((PHOTO_WIDTH * 4) / 3)
-const FOOTER_HEIGHT = 240
+const PHOTO_HEIGHT = Math.round((PHOTO_WIDTH * 3) / 4)
+const FOOTER_HEIGHT = 286
 const CANVAS_HEIGHT =
   TOP_PADDING + PHOTO_HEIGHT * REQUIRED_PHOTO_COUNT + PHOTO_GAP * 3 + FOOTER_HEIGHT
 const FONT_FAMILY = '"Segoe UI", "Malgun Gothic", Arial, sans-serif'
 const OAZ_FRAME_ID = 'oaz'
+const CIRCUIT_FRAME_ID = 'circuit'
+const OAZ_SIDE_LABELS = ['OAZ', '하나와영', 'HANAWAYOUNG', '']
+const QR_CARD_SIZE = 210
+const QR_CARD_PADDING = 16
 
 function validatePhotos(photos) {
   if (!Array.isArray(photos) || photos.length !== REQUIRED_PHOTO_COUNT) {
@@ -133,22 +136,24 @@ function createRoundedRectPath(context, x, y, width, height, radius) {
   context.closePath()
 }
 
-function drawContainedImage(context, image, x, y, targetWidth, targetHeight) {
-  const sourceAspect = image.naturalWidth / image.naturalHeight
-  const targetAspect = targetWidth / targetHeight
-  let drawWidth = targetWidth
-  let drawHeight = targetHeight
-
-  if (sourceAspect > targetAspect) {
-    drawHeight = targetWidth / sourceAspect
-  } else {
-    drawWidth = targetHeight * sourceAspect
+function drawQrCode(context, qrImage, frameOption) {
+  if (!qrImage) {
+    return
   }
 
-  const drawX = x + (targetWidth - drawWidth) / 2
-  const drawY = y + (targetHeight - drawHeight) / 2
+  const x = CANVAS_WIDTH - SIDE_PADDING - QR_CARD_SIZE
+  const y = Math.max(18, Math.round((TOP_PADDING - QR_CARD_SIZE) / 2))
+  const innerSize = QR_CARD_SIZE - QR_CARD_PADDING * 2
 
-  context.drawImage(image, drawX, drawY, drawWidth, drawHeight)
+  context.save()
+  context.fillStyle = '#ffffff'
+  createRoundedRectPath(context, x, y, QR_CARD_SIZE, QR_CARD_SIZE, 16)
+  context.fill()
+  context.strokeStyle = frameOption.id === CIRCUIT_FRAME_ID ? '#111111' : 'rgba(17, 17, 17, 0.18)'
+  context.lineWidth = frameOption.id === CIRCUIT_FRAME_ID ? 2 : 1.5
+  context.stroke()
+  context.drawImage(qrImage, x + QR_CARD_PADDING, y + QR_CARD_PADDING, innerSize, innerSize)
+  context.restore()
 }
 
 function drawOazFrameAccent(context, frameOption) {
@@ -156,17 +161,169 @@ function drawOazFrameAccent(context, frameOption) {
     PHOTO_HEIGHT * REQUIRED_PHOTO_COUNT + PHOTO_GAP * (REQUIRED_PHOTO_COUNT - 1)
 
   context.save()
-  context.fillStyle = frameOption.softAccent ?? '#fff0f7'
-  context.globalAlpha = 0.5
-  context.fillRect(0, 0, CANVAS_WIDTH, TOP_PADDING - 14)
-  context.fillRect(0, TOP_PADDING + photoAreaHeight + 14, CANVAS_WIDTH, FOOTER_HEIGHT)
+  context.fillStyle = '#ffffff'
+  context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)
 
-  context.fillStyle = frameOption.accent ?? '#ed5ba7'
-  context.globalAlpha = 0.14
-  createRoundedRectPath(context, 28, TOP_PADDING, 8, photoAreaHeight, 4)
+  context.strokeStyle = frameOption.accent
+  context.globalAlpha = 0.16
+  context.lineWidth = 3
+  context.beginPath()
+  context.moveTo(SIDE_PADDING / 2, TOP_PADDING - 24)
+  context.lineTo(CANVAS_WIDTH - SIDE_PADDING / 2, TOP_PADDING - 24)
+  context.moveTo(SIDE_PADDING / 2, TOP_PADDING + photoAreaHeight + 26)
+  context.lineTo(CANVAS_WIDTH - SIDE_PADDING / 2, TOP_PADDING + photoAreaHeight + 26)
+  context.stroke()
+
+  context.globalAlpha = 0.08
+  context.fillStyle = frameOption.accent
+  context.fillRect(0, 0, CANVAS_WIDTH, TOP_PADDING)
+  context.fillRect(0, TOP_PADDING + photoAreaHeight, CANVAS_WIDTH, FOOTER_HEIGHT)
+  context.restore()
+}
+
+function drawCircuitNode(context, x, y, radius = 9) {
+  context.beginPath()
+  context.arc(x, y, radius, 0, Math.PI * 2)
   context.fill()
-  createRoundedRectPath(context, CANVAS_WIDTH - 36, TOP_PADDING, 8, photoAreaHeight, 4)
-  context.fill()
+}
+
+function drawCircuitTrace(context, points) {
+  context.beginPath()
+  points.forEach(([x, y], index) => {
+    if (index === 0) {
+      context.moveTo(x, y)
+      return
+    }
+
+    context.lineTo(x, y)
+  })
+  context.stroke()
+}
+
+function drawCircuitFrameAccent(context, frameOption) {
+  const photoAreaHeight =
+    PHOTO_HEIGHT * REQUIRED_PHOTO_COUNT + PHOTO_GAP * (REQUIRED_PHOTO_COUNT - 1)
+  const photoAreaBottom = TOP_PADDING + photoAreaHeight
+  const topLineEnd = CANVAS_WIDTH - SIDE_PADDING - QR_CARD_SIZE - 28
+
+  context.save()
+  context.fillStyle = frameOption.softAccent
+  context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)
+  context.strokeStyle = frameOption.accent
+  context.fillStyle = frameOption.accent
+  context.globalAlpha = 0.68
+  context.lineWidth = 7
+  context.lineCap = 'round'
+  context.lineJoin = 'round'
+
+  drawCircuitTrace(context, [
+    [34, 64],
+    [190, 64],
+    [190, 104],
+    [322, 104],
+    [322, 76],
+    [topLineEnd, 76],
+  ])
+  drawCircuitTrace(context, [
+    [60, 132],
+    [156, 132],
+    [156, 154],
+    [276, 154],
+  ])
+  drawCircuitTrace(context, [
+    [24, TOP_PADDING + 44],
+    [24, photoAreaBottom - 54],
+    [42, photoAreaBottom - 54],
+  ])
+  drawCircuitTrace(context, [
+    [CANVAS_WIDTH - 26, TOP_PADDING + 82],
+    [CANVAS_WIDTH - 26, photoAreaBottom - 90],
+    [CANVAS_WIDTH - 48, photoAreaBottom - 90],
+  ])
+  drawCircuitTrace(context, [
+    [70, photoAreaBottom + 58],
+    [240, photoAreaBottom + 58],
+    [240, photoAreaBottom + 94],
+    [376, photoAreaBottom + 94],
+  ])
+  drawCircuitTrace(context, [
+    [CANVAS_WIDTH - 88, photoAreaBottom + 128],
+    [CANVAS_WIDTH - 220, photoAreaBottom + 128],
+    [CANVAS_WIDTH - 220, photoAreaBottom + 168],
+    [CANVAS_WIDTH - 354, photoAreaBottom + 168],
+  ])
+
+  ;[
+    [34, 64],
+    [190, 64],
+    [322, 104],
+    [topLineEnd, 76],
+    [60, 132],
+    [276, 154],
+    [24, TOP_PADDING + 44],
+    [42, photoAreaBottom - 54],
+    [CANVAS_WIDTH - 26, TOP_PADDING + 82],
+    [CANVAS_WIDTH - 48, photoAreaBottom - 90],
+    [70, photoAreaBottom + 58],
+    [376, photoAreaBottom + 94],
+    [CANVAS_WIDTH - 88, photoAreaBottom + 128],
+    [CANVAS_WIDTH - 354, photoAreaBottom + 168],
+  ].forEach(([x, y]) => {
+    drawCircuitNode(context, x, y)
+  })
+
+  context.restore()
+}
+
+function drawStackedText(context, text, options) {
+  const { color, height, maxFontSize, minFontSize, weight, x, y } = options
+  const letters = Array.from(text)
+  const fontSize = Math.max(
+    minFontSize,
+    Math.min(maxFontSize, Math.floor((height - 18) / Math.max(letters.length, 1))),
+  )
+  const lineHeight = fontSize * 1.08
+  const totalHeight = lineHeight * letters.length
+  let currentY = y + (height - totalHeight) / 2 + lineHeight / 2
+
+  context.fillStyle = color
+  context.textAlign = 'center'
+  context.textBaseline = 'middle'
+  context.font = `${weight} ${fontSize}px ${FONT_FAMILY}`
+
+  letters.forEach((letter) => {
+    context.fillText(letter, x, currentY)
+    currentY += lineHeight
+  })
+}
+
+function drawOazPhotoSideLabels(context, index, frameOption, photoY) {
+  const label = OAZ_SIDE_LABELS[index]
+
+  if (!label) {
+    return
+  }
+
+  const railWidth = 42
+  const railHeight = PHOTO_HEIGHT - 32
+  const railY = photoY + 16
+  const leftRailX = Math.round((SIDE_PADDING - railWidth) / 2)
+  const rightRailX = CANVAS_WIDTH - SIDE_PADDING + leftRailX
+
+  context.save()
+
+  ;[leftRailX, rightRailX].forEach((railX) => {
+    drawStackedText(context, label, {
+      color: frameOption.foreground,
+      height: railHeight,
+      maxFontSize: label.length > 6 ? 34 : 44,
+      minFontSize: 16,
+      weight: 900,
+      x: railX + railWidth / 2,
+      y: railY,
+    })
+  })
+
   context.restore()
 }
 
@@ -191,137 +348,51 @@ function drawPhoto(context, image, index, frameOption) {
     PHOTO_HEIGHT,
   )
 
-  context.strokeStyle = frameOption.border
-  context.lineWidth = 2
+  context.strokeStyle = frameOption.id === CIRCUIT_FRAME_ID ? '#111111' : frameOption.border
+  context.lineWidth = frameOption.id === CIRCUIT_FRAME_ID ? 3 : 2
   context.strokeRect(targetX + 1, targetY + 1, PHOTO_WIDTH - 2, PHOTO_HEIGHT - 2)
-}
 
-function drawOazFooter(context, options) {
-  const { dateText, frameMessage, frameOption, logoImage, showDate } = options
-  const footerTop =
-    TOP_PADDING + PHOTO_HEIGHT * REQUIRED_PHOTO_COUNT + PHOTO_GAP * (REQUIRED_PHOTO_COUNT - 1)
-  const centerX = CANVAS_WIDTH / 2
-  const maxTextWidth = CANVAS_WIDTH - SIDE_PADDING * 2
-  const trimmedMessage = frameMessage.trim()
-  const mainMessage = trimmedMessage.length > 0 ? trimmedMessage : FRAME_BRAND_MESSAGE
-  const logoCardWidth = 340
-  const logoCardHeight = 150
-  const logoCardX = centerX - logoCardWidth / 2
-  const logoCardY = footerTop + 16
-
-  context.save()
-  context.fillStyle = '#ffffff'
-  createRoundedRectPath(context, logoCardX, logoCardY, logoCardWidth, logoCardHeight, 18)
-  context.fill()
-  context.strokeStyle = frameOption.border
-  context.lineWidth = 2
-  context.stroke()
-
-  if (logoImage) {
-    drawContainedImage(
-      context,
-      logoImage,
-      logoCardX + 18,
-      logoCardY + 12,
-      logoCardWidth - 36,
-      logoCardHeight - 24,
-    )
-  }
-  context.restore()
-
-  drawCenteredText(context, mainMessage, {
-    color: frameOption.foreground,
-    maxFontSize: 30,
-    maxWidth: maxTextWidth,
-    minFontSize: 20,
-    weight: 800,
-    x: centerX,
-    y: footerTop + 190,
-  })
-
-  if (showDate) {
-    drawCenteredText(context, dateText, {
-      color: frameOption.secondaryText,
-      maxFontSize: 22,
-      maxWidth: maxTextWidth,
-      minFontSize: 16,
-      weight: 700,
-      x: centerX,
-      y: footerTop + 222,
-    })
+  if (frameOption.id === OAZ_FRAME_ID) {
+    drawOazPhotoSideLabels(context, index, frameOption, targetY)
   }
 }
 
 function drawFooter(context, options) {
-  const { dateText, frameMessage, frameOption, showDate } = options
-
-  if (frameOption.id === OAZ_FRAME_ID) {
-    drawOazFooter(context, options)
-    return
-  }
-
+  const { dateText, frameOption, showDate } = options
   const footerTop =
     TOP_PADDING + PHOTO_HEIGHT * REQUIRED_PHOTO_COUNT + PHOTO_GAP * (REQUIRED_PHOTO_COUNT - 1)
   const centerX = CANVAS_WIDTH / 2
   const maxTextWidth = CANVAS_WIDTH - SIDE_PADDING * 2
-  const trimmedMessage = frameMessage.trim()
-  const hasCustomMessage = trimmedMessage.length > 0
-  const mainMessage = hasCustomMessage ? trimmedMessage : FRAME_BRAND_MESSAGE
 
-  if (hasCustomMessage) {
-    drawCenteredText(context, mainMessage, {
-      color: frameOption.foreground,
-      maxFontSize: 42,
-      maxWidth: maxTextWidth,
-      minFontSize: 28,
-      weight: 800,
-      x: centerX,
-      y: footerTop + 72,
-    })
-    drawCenteredText(context, FRAME_BRAND_MESSAGE, {
-      color: frameOption.secondaryText,
-      maxFontSize: 26,
-      maxWidth: maxTextWidth,
-      minFontSize: 20,
-      weight: 700,
-      x: centerX,
-      y: footerTop + 126,
-    })
-
-    if (showDate) {
-      drawCenteredText(context, dateText, {
-        color: frameOption.secondaryText,
-        maxFontSize: 24,
-        maxWidth: maxTextWidth,
-        minFontSize: 18,
-        weight: 700,
-        x: centerX,
-        y: footerTop + 178,
-      })
-    }
-
-    return
-  }
+  context.save()
+  context.globalAlpha = frameOption.id === CIRCUIT_FRAME_ID ? 0.72 : 0.18
+  context.strokeStyle = frameOption.accent
+  context.lineWidth = 2
+  context.beginPath()
+  context.moveTo(SIDE_PADDING, footerTop + 28)
+  context.lineTo(CANVAS_WIDTH - SIDE_PADDING, footerTop + 28)
+  context.stroke()
+  context.restore()
 
   drawCenteredText(context, FRAME_BRAND_MESSAGE, {
     color: frameOption.foreground,
-    maxFontSize: 42,
+    maxFontSize: 78,
     maxWidth: maxTextWidth,
-    minFontSize: 28,
-    weight: 800,
+    minFontSize: 52,
+    weight: 900,
     x: centerX,
-    y: footerTop + (showDate ? 88 : FOOTER_HEIGHT / 2),
+    y: footerTop + (showDate ? 112 : FOOTER_HEIGHT / 2),
   })
 
   if (showDate) {
     drawCenteredText(context, dateText, {
       color: frameOption.secondaryText,
-      maxFontSize: 24,
+      maxFontSize: 46,
       maxWidth: maxTextWidth,
-      minFontSize: 18,
-      weight: 700,
+      minFontSize: 30,
+      weight: 800,
       x: centerX,
-      y: footerTop + 150,
+      y: footerTop + 194,
     })
   }
 }
@@ -329,8 +400,8 @@ function drawFooter(context, options) {
 export async function renderFinalStrip({
   dateText,
   frameColor,
-  frameMessage,
   photos,
+  qrCodeDataUrl = '',
   showDate,
 }) {
   validatePhotos(photos)
@@ -346,11 +417,13 @@ export async function renderFinalStrip({
   }
 
   const frameOption = getFrameOption(frameColor)
-  const [images, logoImage] = await Promise.all([
+  const [images, qrImage] = await Promise.all([
     Promise.all(photos.map((photo) => loadImage(photo.url))),
-    frameOption.id === OAZ_FRAME_ID ? loadImage(oazLogo) : Promise.resolve(null),
+    qrCodeDataUrl ? loadImage(qrCodeDataUrl) : Promise.resolve(null),
   ])
 
+  context.imageSmoothingEnabled = true
+  context.imageSmoothingQuality = 'high'
   context.fillStyle = frameOption.background
   context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)
 
@@ -358,15 +431,19 @@ export async function renderFinalStrip({
     drawOazFrameAccent(context, frameOption)
   }
 
+  if (frameOption.id === CIRCUIT_FRAME_ID) {
+    drawCircuitFrameAccent(context, frameOption)
+  }
+
+  drawQrCode(context, qrImage, frameOption)
+
   images.forEach((image, index) => {
     drawPhoto(context, image, index, frameOption)
   })
 
   drawFooter(context, {
     dateText,
-    frameMessage,
     frameOption,
-    logoImage,
     showDate,
   })
 

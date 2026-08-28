@@ -4,15 +4,28 @@ import oazLogo from './assets/oaz_logo.png'
 import './App.css'
 import FinalResultScreen from './components/FinalResultScreen'
 import FrameCustomizer from './components/FrameCustomizer'
+import PrinterSetupPanel from './components/PrinterSetupPanel'
 import {
   DEFAULT_FRAME_COLOR,
-  DEFAULT_FRAME_INPUT_MESSAGE,
   DEFAULT_SHOW_FRAME_DATE,
-  FRAME_MESSAGE_MAX_LENGTH,
   formatLocalFrameDate,
 } from './constants/frameOptions'
 import { captureFrameFromVideo } from './utils/captureFrame'
 import { createShareImageBlob } from './utils/createShareImageBlob'
+import {
+  createLuckJingleBlePrinter,
+  DENSITY_OPTIONS,
+  getPrinterErrorMessage,
+  isWebBluetoothSupported,
+  loadStoredPrinterSettings,
+  MIN_LONG_PRINT_BATTERY_PERCENT,
+  normalizePrinterSettings,
+  PPS1_CREDIT_PACKET_SIZE,
+  PRINTER_NAME_PREFIX,
+  saveStoredPrinterSettings,
+  SAFE_PHOTO_DENSITY,
+  TEST_RASTER_WRITE_MODES,
+} from './utils/luckJingleBlePrinter'
 import { renderFinalStrip } from './utils/renderFinalStrip'
 
 const TOTAL_SHOTS = 6
@@ -31,6 +44,26 @@ const CAPTURE_ERROR_MESSAGE =
   '사진을 촬영하지 못했어요.\n카메라 화면을 확인한 뒤 다시 시도해 주세요.'
 const QR_SHARE_ERROR_MESSAGE =
   'QR을 준비하지 못했어요.\n인터넷 연결을 확인한 뒤 다시 시도해 주세요.'
+const DIRECT_PRINT_COMPLETE_MESSAGE = '인쇄 데이터 전송 완료'
+const DIRECT_PRINT_NOT_CONFIGURED_MESSAGE = '프린터가 준비되지 않았어요. 관리자에게 알려 주세요.'
+const DIRECT_PRINT_RECONNECT_MESSAGE =
+  '프린터 연결이 끊겼어요.\n프린터 다시 연결을 눌러 주세요.'
+const DIRECT_PRINT_RECONNECTED_MESSAGE = '프린터가 다시 연결됐어요. 인쇄할 수 있어요.'
+const PPS1_PRINTER_NOT_FOUND_MESSAGE =
+  'PPS1 프린터를 찾지 못했어요.\nLuck Jingle을 완전히 종료하고\n프린터 전원을 껐다 켠 뒤 다시 시도해 주세요.'
+
+const SHARE_IMAGE_ID_HEADER = 'X-Life4Cut-Image-Id'
+const SHARE_IMAGE_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const QR_CODE_OPTIONS = {
+  errorCorrectionLevel: 'M',
+  width: 320,
+  margin: 4,
+  color: {
+    dark: '#000000',
+    light: '#ffffff',
+  },
+}
 
 const guideItems = [
   {
@@ -110,6 +143,290 @@ function normalizeSharePageUrl(pageUrl) {
   return normalizedUrl.href
 }
 
+function createFallbackShareImageId() {
+  if (
+    typeof crypto === 'undefined' ||
+    typeof crypto.getRandomValues !== 'function'
+  ) {
+    throw new Error('Crypto API is unavailable')
+  }
+
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(
+    16,
+    20,
+  )}-${hex.slice(20)}`
+}
+
+function createShareImageId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+
+  return createFallbackShareImageId()
+}
+
+function createSharePageUrl(imageId) {
+  if (!SHARE_IMAGE_ID_PATTERN.test(imageId)) {
+    throw new Error('Share image id is invalid')
+  }
+
+  return normalizeSharePageUrl(`/download/${imageId}`)
+}
+
+function createQrCodeDataUrl(pageUrl) {
+  return QRCode.toDataURL(pageUrl, QR_CODE_OPTIONS)
+}
+
+async function uploadFinalImageForShare(finalImageBlob, finalImageUrl, options = {}) {
+  const shareImageBlob = await createShareImageBlob(finalImageBlob, finalImageUrl)
+  const headers = {
+    'Content-Type': shareImageBlob.type || 'image/png',
+  }
+
+  if (options.imageId) {
+    headers[SHARE_IMAGE_ID_HEADER] = options.imageId
+  }
+
+  const response = await fetch('/api/final-images', {
+    method: 'POST',
+    headers,
+    body: shareImageBlob,
+  })
+  const payload = await response.json()
+
+  if (!response.ok) {
+    throw new Error('Upload failed')
+  }
+
+  if (typeof payload?.id !== 'string' || payload.id.length === 0) {
+    throw new Error('Share image id is missing')
+  }
+
+  return {
+    ...payload,
+    pageUrl: normalizeSharePageUrl(payload?.pageUrl),
+  }
+}
+
+function shouldShowPrinterSetup() {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  return new URLSearchParams(window.location.search).get('printerSetup') === '1'
+}
+
+function getStoredPrinterDeviceLabel() {
+  const storedSettings = loadStoredPrinterSettings()
+
+  if (storedSettings.deviceName) {
+    return storedSettings.deviceName
+  }
+
+  return storedSettings.deviceId ? '이름을 제공하지 않는 BLE 장치' : ''
+}
+
+function getPrinterHealthStatusLabel(status) {
+  if (!status) {
+    return '확인 불가'
+  }
+
+  if (status.isPrinting) {
+    return '인쇄 중'
+  }
+
+  const firstIssueCode = status.issues?.[0]?.code
+
+  if (firstIssueCode === 'paper-empty') {
+    return '용지 없음'
+  }
+
+  if (firstIssueCode === 'cover-open') {
+    return '덮개 열림'
+  }
+
+  if (firstIssueCode === 'low-battery') {
+    return '배터리 부족'
+  }
+
+  if (firstIssueCode === 'overheating') {
+    return '과열'
+  }
+
+  return '준비됨'
+}
+
+function getPrinterDensityLabel(density) {
+  return DENSITY_OPTIONS.find((densityOption) => densityOption.value === density)?.label ?? '연하게'
+}
+
+function createDefaultPrinterPrintTrace() {
+  return {
+    creditWaitInProgress: false,
+    creditWaitPhase: '',
+    creditWaitStartedAt: '',
+    currentPhase: '',
+    disconnectAt: '',
+    events: [],
+    lastCompletedPhase: '',
+    lastCreditNotificationAt: '',
+    lastNotificationAt: '',
+    lastWritePacketHex: '',
+    pendingWritePreviewHex: '',
+    rasterCompletedBytes: 0,
+    rasterCompletedPackets: 0,
+    rasterTotalBytes: 0,
+    rasterTotalPackets: 0,
+  }
+}
+
+function createDefaultRasterWriteDiagnostics() {
+  return {
+    currentJobId: '',
+    currentTestRasterWriteMode: TEST_RASTER_WRITE_MODES.withoutResponse,
+    duplicateTestPrintBlockedCount: 0,
+    imageHeight: 128,
+    lastJobId: '',
+    lastRasterWriteMode: '',
+    markerMetadata: [],
+    notificationEvents: [],
+    originalWriteError: {
+      apiName: '',
+      byteEnd: null,
+      byteStart: null,
+      message: '',
+      name: '',
+      occurred: false,
+      packetSeq: null,
+      writeMode: '',
+    },
+    packetEvents: [],
+    printWidth: 0,
+    rasterRowBytes: 0,
+    rasterTotalBytes: 0,
+    rasterWriteAttemptedBytes: 0,
+    rasterWriteAttemptedPackets: 0,
+    rasterWriteRejectedPackets: 0,
+    rasterWriteResolvedBytes: 0,
+    rasterWriteResolvedPackets: 0,
+    testPrintInvocationCount: 0,
+    testRasterEffectivePacketSize: PPS1_CREDIT_PACKET_SIZE,
+    lastWithResponseWriteDurationMs: null,
+    withResponseWriteAverageDurationMs: null,
+    withResponseWriteMaxDurationMs: null,
+    withResponseWriteSuccessPackets: 0,
+    withResponseWriteTotalDurationMs: 0,
+    withResponseWriteError: {
+      message: '',
+      name: '',
+      occurred: false,
+      phase: '',
+    },
+  }
+}
+
+function createDefaultPrinterTransportDiagnostics() {
+  return {
+    activePacketSize: PPS1_CREDIT_PACKET_SIZE,
+    activePacketSizeSource: 'default 20',
+    creditNotifyConnected: false,
+    currentCredit: 0,
+    packetSize: PPS1_CREDIT_PACKET_SIZE,
+    printerRequestedPacketSize: null,
+    lastCreditNotificationHex: '',
+    lastNotificationHex: '',
+    creditWaitTimedOut: false,
+    creditLog: [],
+    lastSession: {
+      currentCredit: null,
+      disconnectEventOccurred: false,
+      disconnectedAt: '',
+      lastCreditNotificationHex: '',
+      lastWebBluetoothWritePacket: {
+        bufferByteLength: 0,
+        byteLength: 0,
+        byteOffset: 0,
+      },
+      lastWebBluetoothWriteSize: 0,
+      lastNotificationHex: '',
+      packetSizeWriteError: {
+        attemptedSize: null,
+        message: '',
+        name: '',
+        occurred: false,
+        phase: '',
+      },
+      printTrace: createDefaultPrinterPrintTrace(),
+      printerRequestedPacketSize: null,
+      rasterWriteDiagnostics: createDefaultRasterWriteDiagnostics(),
+      activePacketSize: PPS1_CREDIT_PACKET_SIZE,
+      activePacketSizeSource: 'default 20',
+      stopAck: {
+        durationMs: null,
+        packetHex: '',
+        status: 'idle',
+      },
+      writeCharacteristicCapabilities: {
+        uuid: '',
+        properties: {
+          indicate: null,
+          notify: null,
+          read: null,
+          write: null,
+          writeWithoutResponse: null,
+        },
+        api: {
+          writeValueWithResponse: null,
+          writeValueWithoutResponse: null,
+        },
+      },
+    },
+    stopAck: {
+      durationMs: null,
+      packetHex: '',
+      status: 'idle',
+    },
+    lastWebBluetoothWritePacket: {
+      bufferByteLength: 0,
+      byteLength: 0,
+      byteOffset: 0,
+    },
+    lastWebBluetoothWriteSize: 0,
+    packetSizeWriteError: {
+      attemptedSize: null,
+      message: '',
+      name: '',
+      occurred: false,
+      phase: '',
+    },
+    printTrace: createDefaultPrinterPrintTrace(),
+    rasterWriteDiagnostics: createDefaultRasterWriteDiagnostics(),
+    writeCharacteristicUuid: '',
+    writeCharacteristicCapabilities: {
+      uuid: '',
+      properties: {
+        indicate: null,
+        notify: null,
+        read: null,
+        write: null,
+        writeWithoutResponse: null,
+      },
+      api: {
+        writeValueWithResponse: null,
+        writeValueWithoutResponse: null,
+      },
+    },
+    writeWithoutResponseAvailable: false,
+  }
+}
+
 function BrandHeader({ logoSize = 'compact' }) {
   return (
     <div className={`brand-header brand-header--${logoSize}`}>
@@ -133,7 +450,7 @@ function PhotoStrip() {
   )
 }
 
-function StartScreen({ onStart }) {
+function StartScreen({ printerSetupPanel, onStart }) {
   return (
     <main className="screen start-screen">
       <section className="start-copy" aria-labelledby="start-title">
@@ -165,6 +482,8 @@ function StartScreen({ onStart }) {
       <div className="start-visual">
         <PhotoStrip />
       </div>
+
+      {printerSetupPanel && <div className="start-printer-setup">{printerSetupPanel}</div>}
     </main>
   )
 }
@@ -626,7 +945,7 @@ function SelectionPreviewScreen({
           </button>
         </div>
         <p className="helper-text review-helper">
-          다음 단계에서 프레임 색상과 문구를 선택할 수 있어요.
+          다음 단계에서 프레임 색상과 날짜 표시를 선택할 수 있어요.
         </p>
       </section>
     </main>
@@ -645,8 +964,6 @@ function App() {
   const [selectionNotice, setSelectionNotice] = useState('')
   const [frameColor, setFrameColor] = useState(DEFAULT_FRAME_COLOR)
   const [showFrameDate, setShowFrameDate] = useState(DEFAULT_SHOW_FRAME_DATE)
-  const [frameMessage, setFrameMessage] = useState(DEFAULT_FRAME_INPUT_MESSAGE)
-  const [frameNotice, setFrameNotice] = useState('')
   const [finalImageBlob, setFinalImageBlob] = useState(null)
   const [finalImageUrl, setFinalImageUrl] = useState('')
   const [isRenderingFinalImage, setIsRenderingFinalImage] = useState(false)
@@ -658,6 +975,28 @@ function App() {
   const [sharedImageExpiresAt, setSharedImageExpiresAt] = useState('')
   const [isQrDialogOpen, setIsQrDialogOpen] = useState(false)
   const [qrShareError, setQrShareError] = useState('')
+  const [printShareNotice, setPrintShareNotice] = useState('')
+  const [printShareError, setPrintShareError] = useState('')
+  const [directPrintSupported, setDirectPrintSupported] = useState(() => isWebBluetoothSupported())
+  const [printerSettings, setPrinterSettings] = useState(() => loadStoredPrinterSettings())
+  const [printerConnectionState, setPrinterConnectionState] = useState(() =>
+    isWebBluetoothSupported() ? 'disconnected' : 'unsupported',
+  )
+  const [printerDeviceName, setPrinterDeviceName] = useState(() => getStoredPrinterDeviceLabel())
+  const [printerModel, setPrinterModel] = useState('')
+  const [printerFirmwareVersion, setPrinterFirmwareVersion] = useState('')
+  const [printerTransportDiagnostics, setPrinterTransportDiagnostics] = useState(() =>
+    createDefaultPrinterTransportDiagnostics(),
+  )
+  const [printerStatusMessage, setPrinterStatusMessage] = useState('')
+  const [printerBatteryPercent, setPrinterBatteryPercent] = useState(null)
+  const [printerHealthStatus, setPrinterHealthStatus] = useState('확인 불가')
+  const [isDirectPrintVerified, setIsDirectPrintVerified] = useState(
+    () => loadStoredPrinterSettings().directPrintVerified,
+  )
+  const [isAwaitingTestPrintConfirmation, setIsAwaitingTestPrintConfirmation] = useState(false)
+  const [printProgressPercent, setPrintProgressPercent] = useState(null)
+  const [adminLongPrintProgress, setAdminLongPrintProgress] = useState(null)
   const [currentShotIndex, setCurrentShotIndex] = useState(0)
   const [countdown, setCountdown] = useState(null)
   const [nextShotRemaining, setNextShotRemaining] = useState(null)
@@ -673,6 +1012,9 @@ function App() {
   const streamRef = useRef(null)
   const videoRef = useRef(null)
   const qrButtonRef = useRef(null)
+  const printerRef = useRef(null)
+  const printerRestoreAttemptedRef = useRef(false)
+  const testPrintInFlightRef = useRef(false)
   const capturedPhotosRef = useRef([])
   const finalImageUrlRef = useRef('')
   const captureTimeoutsRef = useRef(new Set())
@@ -680,11 +1022,31 @@ function App() {
   const selectedPhotos = selectedPhotoIds
     .map((photoId) => capturedPhotos.find((photo) => photo.id === photoId))
     .filter(Boolean)
+  const showPrinterSetupPanel = shouldShowPrinterSetup()
   const hasCompleteFrameSelection =
     selectedPhotoIds.length === REQUIRED_SELECTION_COUNT &&
     selectedPhotos.length === REQUIRED_SELECTION_COUNT &&
     selectedPhotos.every((photo) => Boolean(photo.url))
   const hasFinalImage = Boolean(finalImageBlob && finalImageUrl)
+  const hasConfiguredPrinter = Boolean(
+    printerSettings.deviceId ||
+      printerSettings.deviceName ||
+      printerDeviceName ||
+      printerRef.current?.hasDevice(),
+  )
+  const isDirectPrintReady =
+    directPrintSupported &&
+    hasConfiguredPrinter &&
+    printerConnectionState === 'connected'
+  const shouldShowPrinterReconnect =
+    directPrintSupported &&
+    hasFinalImage &&
+    !isDirectPrintReady &&
+    printerConnectionState !== 'printing' &&
+    (printerConnectionState === 'connecting' ||
+      printerConnectionState === 'disconnected' ||
+      printerConnectionState === 'error' ||
+      !hasConfiguredPrinter)
 
   const clearCaptureTimers = useCallback(() => {
     captureTimeoutsRef.current.forEach((timer) => {
@@ -760,10 +1122,18 @@ function App() {
     setQrShareError('')
   }, [])
 
+  const resetPrintShareState = useCallback(() => {
+    setPrintShareNotice('')
+    setPrintShareError('')
+    setAdminLongPrintProgress(null)
+    setPrintProgressPercent(null)
+  }, [])
+
   const clearFinalImage = useCallback((options = {}) => {
     const { clearError = true } = options
 
     resetQrShareState()
+    resetPrintShareState()
 
     if (finalImageUrlRef.current) {
       URL.revokeObjectURL(finalImageUrlRef.current)
@@ -776,13 +1146,374 @@ function App() {
     if (clearError) {
       setFinalImageError('')
     }
-  }, [resetQrShareState])
+  }, [resetPrintShareState, resetQrShareState])
+
+  const storePrinterSettings = useCallback((nextSettings) => {
+    const normalizedSettings = normalizePrinterSettings(nextSettings)
+
+    setPrinterSettings(normalizedSettings)
+    setIsDirectPrintVerified(normalizedSettings.directPrintVerified)
+    saveStoredPrinterSettings(normalizedSettings)
+
+    return normalizedSettings
+  }, [])
+
+  const getPrinterClient = useCallback(() => {
+    if (!printerRef.current) {
+      printerRef.current = createLuckJingleBlePrinter({
+        onDisconnect: () => {
+          testPrintInFlightRef.current = false
+          setPrinterConnectionState((currentState) =>
+            currentState === 'unsupported' ? currentState : 'disconnected',
+          )
+          setPrinterStatusMessage(DIRECT_PRINT_RECONNECT_MESSAGE)
+          setPrintProgressPercent(null)
+
+          if (finalImageUrlRef.current) {
+            setPrintShareNotice('')
+            setPrintShareError(DIRECT_PRINT_RECONNECT_MESSAGE)
+          }
+        },
+        onBattery: (batteryPercent) => {
+          setPrinterBatteryPercent(batteryPercent)
+        },
+        onModel: (model) => {
+          setPrinterModel(model)
+        },
+        onDiagnostics: (diagnostics) => {
+          setPrinterModel(diagnostics.model ?? '')
+          setPrinterFirmwareVersion(diagnostics.firmwareVersion ?? '')
+        },
+        onTransportDiagnostics: (transportDiagnostics) => {
+          setPrinterTransportDiagnostics({
+            ...createDefaultPrinterTransportDiagnostics(),
+            ...transportDiagnostics,
+          })
+        },
+        onStatus: (status) => {
+          setPrinterHealthStatus(getPrinterHealthStatusLabel(status))
+
+          if (status?.message) {
+            setPrinterStatusMessage(status.message)
+          }
+        },
+      })
+    }
+
+    return printerRef.current
+  }, [])
+
+  const applyConnectedPrinterInfo = useCallback(
+    (printerInfo, options = {}) => {
+      const {
+        connectionState = 'connected',
+        preserveVerification = false,
+        statusMessage = printerInfo?.status?.message ?? '프린터가 연결됐어요.',
+      } = options
+      const nextDeviceName = printerInfo?.deviceName ?? ''
+      const nextDeviceId = printerInfo?.deviceId ?? ''
+      const selectedDeviceLabel = nextDeviceName || '이름을 제공하지 않는 BLE 장치'
+      const storedDeviceMatches =
+        (nextDeviceId && printerSettings.deviceId === nextDeviceId) ||
+        (nextDeviceName && printerSettings.deviceName === nextDeviceName)
+      const nextDirectPrintVerified = preserveVerification
+        ? printerSettings.directPrintVerified
+        : storedDeviceMatches
+          ? printerSettings.directPrintVerified
+          : false
+      const nextSettings = storePrinterSettings({
+        ...printerSettings,
+        deviceId: nextDeviceId,
+        deviceName: nextDeviceName,
+        directPrintVerified: nextDirectPrintVerified,
+      })
+
+      setPrinterConnectionState(connectionState)
+      setPrinterDeviceName(selectedDeviceLabel)
+      setPrinterModel(printerInfo?.model ?? '')
+      setPrinterFirmwareVersion(printerInfo?.firmwareVersion ?? '')
+      setPrinterTransportDiagnostics({
+        ...createDefaultPrinterTransportDiagnostics(),
+        ...printerInfo?.transportDiagnostics,
+      })
+      setPrinterBatteryPercent(
+        Number.isFinite(printerInfo?.batteryPercent) ? printerInfo.batteryPercent : null,
+      )
+      setPrinterHealthStatus(getPrinterHealthStatusLabel(printerInfo?.status))
+      setPrinterStatusMessage(statusMessage)
+      setIsAwaitingTestPrintConfirmation(false)
+      setIsDirectPrintVerified(nextSettings.directPrintVerified)
+
+      return nextSettings
+    },
+    [printerSettings, storePrinterSettings],
+  )
+
+  const ensurePrinterConnectedForJob = useCallback(
+    async (statusMessage, options = {}) => {
+      const { connectionState = 'printing' } = options
+      const printerClient = getPrinterClient()
+      const printerInfo = await printerClient.ensureConnected({
+        savedDevice: {
+          deviceId: printerSettings.deviceId,
+          deviceName: printerSettings.deviceName,
+        },
+      })
+
+      applyConnectedPrinterInfo(printerInfo, {
+        connectionState,
+        preserveVerification: true,
+        statusMessage,
+      })
+
+      return printerClient
+    },
+    [
+      applyConnectedPrinterInfo,
+      getPrinterClient,
+      printerSettings.deviceId,
+      printerSettings.deviceName,
+    ],
+  )
+
+  const handlePrinterConnect = useCallback(async (options = {}) => {
+    const { includeAllDevices = false } = options
+
+    if (!directPrintSupported) {
+      const nextMessage =
+        '직접 인쇄를 사용하려면 Bluetooth 인쇄를 지원하는 부스 브라우저가 필요해요.'
+
+      setPrinterConnectionState('unsupported')
+      setPrinterStatusMessage(nextMessage)
+      return { ok: false, message: nextMessage }
+    }
+
+    setPrinterConnectionState('connecting')
+    setPrinterStatusMessage(
+      includeAllDevices
+        ? 'Bluetooth 장치 선택창에서 프린터를 선택해 주세요.'
+        : `${PRINTER_NAME_PREFIX}로 시작하는 프린터를 검색하고 있어요.`,
+    )
+    setIsAwaitingTestPrintConfirmation(false)
+
+    try {
+      const printerInfo = await getPrinterClient().requestAndConnect({ includeAllDevices })
+
+      const nextSettings = applyConnectedPrinterInfo(printerInfo)
+
+      return {
+        directPrintVerified: Boolean(nextSettings?.directPrintVerified),
+        ok: true,
+        printerInfo,
+      }
+    } catch (error) {
+      setPrinterConnectionState('disconnected')
+
+      if (error?.name === 'NotFoundError') {
+        const nextMessage = includeAllDevices
+          ? '프린터 선택이 취소됐어요.'
+          : PPS1_PRINTER_NOT_FOUND_MESSAGE
+
+        setPrinterStatusMessage(nextMessage)
+        return { ok: false, message: nextMessage }
+      }
+
+      const nextMessage = getPrinterErrorMessage(error)
+
+      setPrinterStatusMessage(nextMessage)
+      return { ok: false, message: nextMessage }
+    }
+  }, [applyConnectedPrinterInfo, directPrintSupported, getPrinterClient])
+
+  const handleShowAllBleDevices = useCallback(() => {
+    return handlePrinterConnect({ includeAllDevices: true })
+  }, [handlePrinterConnect])
+
+  const handlePrinterDisconnect = useCallback(async () => {
+    await printerRef.current?.disconnect()
+    storePrinterSettings({
+      ...printerSettings,
+      deviceId: '',
+      deviceName: '',
+      directPrintVerified: false,
+    })
+    setPrinterConnectionState(directPrintSupported ? 'disconnected' : 'unsupported')
+    setPrinterDeviceName('')
+    setPrinterModel('')
+    setPrinterFirmwareVersion('')
+    setPrinterTransportDiagnostics(createDefaultPrinterTransportDiagnostics())
+    setPrinterBatteryPercent(null)
+    setPrinterHealthStatus('확인 불가')
+    setPrinterStatusMessage('프린터 연결을 해제했어요.')
+    setIsAwaitingTestPrintConfirmation(false)
+  }, [directPrintSupported, printerSettings, storePrinterSettings])
+
+  const handlePrinterWidthChange = useCallback(
+    (printWidth) => {
+      storePrinterSettings({
+        ...printerSettings,
+        printWidth,
+        directPrintVerified: false,
+      })
+      setIsAwaitingTestPrintConfirmation(false)
+      setPrinterStatusMessage('인쇄 폭이 변경됐어요. 테스트 인쇄를 다시 확인해 주세요.')
+    },
+    [printerSettings, storePrinterSettings],
+  )
+
+  const handlePrinterDensityChange = useCallback(
+    (density) => {
+      storePrinterSettings({
+        ...printerSettings,
+        density,
+        directPrintVerified: false,
+      })
+      setIsAwaitingTestPrintConfirmation(false)
+      setPrinterStatusMessage('농도가 변경됐어요. 테스트 인쇄를 다시 확인해 주세요.')
+    },
+    [printerSettings, storePrinterSettings],
+  )
+
+  const handleTestRasterWriteModeChange = useCallback(
+    (testRasterWriteMode) => {
+      storePrinterSettings({
+        ...printerSettings,
+        testRasterWriteMode,
+      })
+      setPrinterStatusMessage('테스트 raster write mode를 변경했어요.')
+    },
+    [printerSettings, storePrinterSettings],
+  )
+
+  const handleTestPrint = useCallback(async () => {
+    const diagnosticsPrinterClient = getPrinterClient()
+
+    if (testPrintInFlightRef.current) {
+      diagnosticsPrinterClient.recordDuplicateTestPrintBlocked()
+      setPrinterStatusMessage('테스트 인쇄가 이미 진행 중이에요.')
+      return
+    }
+
+    testPrintInFlightRef.current = true
+    diagnosticsPrinterClient.recordTestPrintInvocation()
+
+    try {
+    if (!directPrintSupported) {
+      setPrinterConnectionState('unsupported')
+      setPrinterStatusMessage(
+        '직접 인쇄를 사용하려면 Bluetooth 인쇄를 지원하는 부스 브라우저가 필요해요.',
+      )
+      return
+    }
+
+    if (!hasConfiguredPrinter) {
+      setPrinterStatusMessage('프린터 연결을 먼저 확인해 주세요.')
+      return
+    }
+
+    setPrinterConnectionState('printing')
+    setPrinterStatusMessage('테스트 인쇄 데이터를 전송하고 있어요.')
+    setIsAwaitingTestPrintConfirmation(false)
+
+    try {
+      const printerClient = await ensurePrinterConnectedForJob('테스트 인쇄 데이터를 전송하고 있어요.')
+
+      await printerClient.printTestPage(printerSettings, { allowReconnect: false })
+      setPrinterConnectionState(printerClient.isConnected() ? 'connected' : 'disconnected')
+      setPrinterStatusMessage(
+        printerClient.isConnected()
+          ? '테스트 인쇄 데이터 전송 완료'
+          : '테스트 인쇄 데이터 전송 완료\n다음 인쇄 시 자동 재연결을 시도해요.',
+      )
+      setIsAwaitingTestPrintConfirmation(true)
+    } catch (error) {
+      if (error?.code === 'print-disconnected') {
+        setPrinterConnectionState('disconnected')
+        setPrinterStatusMessage(
+          '테스트 인쇄 중 프린터 연결이 끊겼어요.\n용지가 정상 출력됐다면 정상 출력됨을 눌러 주세요.',
+        )
+        setIsAwaitingTestPrintConfirmation(true)
+        return
+      }
+
+      const nextState =
+        error?.code === 'connection-lost' ||
+        error?.code === 'not-connected' ||
+        error?.code === 'device-missing'
+          ? 'disconnected'
+          : 'error'
+
+      setPrinterConnectionState(nextState)
+      setPrinterStatusMessage(getPrinterErrorMessage(error))
+    }
+    } finally {
+      testPrintInFlightRef.current = false
+    }
+  }, [
+    directPrintSupported,
+    ensurePrinterConnectedForJob,
+    getPrinterClient,
+    hasConfiguredPrinter,
+    printerSettings,
+  ])
+
+  const handleConfirmTestPrint = useCallback(() => {
+    storePrinterSettings({
+      ...printerSettings,
+      directPrintVerified: true,
+    })
+    setIsAwaitingTestPrintConfirmation(false)
+    setPrinterStatusMessage('테스트 출력 확인 완료')
+  }, [printerSettings, storePrinterSettings])
+
+  const handleRefreshPrinterStatus = useCallback(async () => {
+    if (!directPrintSupported) {
+      setPrinterConnectionState('unsupported')
+      setPrinterStatusMessage(
+        '직접 인쇄를 사용하려면 Bluetooth 인쇄를 지원하는 부스 브라우저가 필요해요.',
+      )
+      return
+    }
+
+    if (!hasConfiguredPrinter) {
+      setPrinterStatusMessage('프린터 연결을 먼저 확인해 주세요.')
+      return
+    }
+
+    setPrinterConnectionState('connecting')
+    setPrinterStatusMessage('프린터 상태를 확인하고 있어요.')
+
+    try {
+      const printerClient = await ensurePrinterConnectedForJob('프린터 상태를 확인하고 있어요.', {
+        connectionState: 'connected',
+      })
+      const diagnostics = await printerClient.queryPrinterDiagnostics()
+      const batteryPercent = await printerClient.queryBattery()
+      const status = await printerClient.queryStatus()
+
+      setPrinterModel(diagnostics.model ?? '')
+      setPrinterFirmwareVersion(diagnostics.firmwareVersion ?? '')
+      setPrinterBatteryPercent(Number.isFinite(batteryPercent) ? batteryPercent : null)
+      setPrinterHealthStatus(getPrinterHealthStatusLabel(status))
+      setPrinterConnectionState(printerClient.isConnected() ? 'connected' : 'disconnected')
+      setPrinterStatusMessage(
+        status ? '프린터 상태를 확인했어요.' : '프린터 상태 응답을 받지 못했어요.',
+      )
+    } catch (error) {
+      const nextMessage = getPrinterErrorMessage(error)
+
+      setPrinterConnectionState('disconnected')
+      setPrinterStatusMessage(nextMessage)
+    }
+  }, [
+    directPrintSupported,
+    ensurePrinterConnectedForJob,
+    hasConfiguredPrinter,
+  ])
 
   const resetFrameSettings = useCallback(() => {
     setFrameColor(DEFAULT_FRAME_COLOR)
     setShowFrameDate(DEFAULT_SHOW_FRAME_DATE)
-    setFrameMessage(DEFAULT_FRAME_INPUT_MESSAGE)
-    setFrameNotice('')
   }, [])
 
   const clearCapturedPhotos = useCallback(() => {
@@ -861,6 +1592,66 @@ function App() {
       stopCameraStream({ updateState: false })
     }
   }, [clearCaptureTimers, revokePhotoUrls, stopCameraStream])
+
+  useEffect(() => {
+    const supported = isWebBluetoothSupported()
+
+    setDirectPrintSupported(supported)
+    setPrinterConnectionState((currentState) => {
+      if (!supported) {
+        return 'unsupported'
+      }
+
+      return currentState === 'unsupported' ? 'disconnected' : currentState
+    })
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      void printerRef.current?.disconnect({ forgetDevice: false })
+    }
+  }, [])
+
+  useEffect(() => {
+    if (
+      !showPrinterSetupPanel ||
+      !directPrintSupported ||
+      printerRestoreAttemptedRef.current ||
+      (!printerSettings.deviceId && !printerSettings.deviceName)
+    ) {
+      return
+    }
+
+    printerRestoreAttemptedRef.current = true
+    setPrinterConnectionState('connecting')
+    setPrinterStatusMessage('권한이 있는 프린터를 다시 연결하고 있어요.')
+
+    getPrinterClient()
+      .reconnectAuthorizedDevice({
+        deviceId: printerSettings.deviceId,
+        deviceName: printerSettings.deviceName,
+      })
+      .then((printerInfo) => {
+        if (printerInfo) {
+          applyConnectedPrinterInfo(printerInfo, { preserveVerification: true })
+          return
+        }
+
+        setPrinterConnectionState('disconnected')
+        setPrinterStatusMessage('저장된 프린터 권한을 찾지 못했어요.')
+      })
+      .catch(() => {
+        setPrinterConnectionState('disconnected')
+        setPrinterStatusMessage('프린터 자동 재연결을 완료하지 못했어요.')
+      })
+  }, [
+    applyConnectedPrinterInfo,
+    directPrintSupported,
+    getPrinterClient,
+    printerSettings.deviceId,
+    printerSettings.deviceName,
+    showPrinterSetupPanel,
+  ])
 
   const getVideoDeviceCount = async () => {
     if (
@@ -1169,19 +1960,7 @@ function App() {
     }
 
     setSelectionNotice('')
-    setFrameNotice('')
     setCurrentScreen('frame')
-  }
-
-  const handleFrameMessageChange = (nextMessage) => {
-    const messageWithoutLineBreaks = nextMessage.replace(/[\r\n]/g, '')
-
-    setFrameMessage(messageWithoutLineBreaks)
-    setFrameNotice(
-      messageWithoutLineBreaks.length >= FRAME_MESSAGE_MAX_LENGTH
-        ? '하단 문구는 최대 24자까지 입력할 수 있어요.'
-        : '',
-    )
   }
 
   const handleCreateFinalImage = async () => {
@@ -1197,26 +1976,43 @@ function App() {
     setIsRenderingFinalImage(true)
     setFinalImageError('')
     clearFinalImage({ clearError: false })
+    setIsUploadingShareImage(true)
 
     try {
+      const shareImageId = createShareImageId()
+      const sharePageUrl = createSharePageUrl(shareImageId)
+      const nextQrCodeDataUrl = await createQrCodeDataUrl(sharePageUrl)
       const pngBlob = await renderFinalStrip({
         photos: selectedPhotos,
         frameColor,
         showDate: showFrameDate,
-        frameMessage,
         dateText: formatLocalFrameDate(),
+        qrCodeDataUrl: nextQrCodeDataUrl,
       })
+      const payload = await uploadFinalImageForShare(pngBlob, '', {
+        imageId: shareImageId,
+      })
+
+      if (payload.id !== shareImageId) {
+        throw new Error('Share image id mismatch')
+      }
+
       const pngUrl = URL.createObjectURL(pngBlob)
 
       finalImageUrlRef.current = pngUrl
       setFinalImageBlob(pngBlob)
       setFinalImageUrl(pngUrl)
+      setSharedImageId(shareImageId)
+      setSharedImagePageUrl(sharePageUrl)
+      setSharedImageExpiresAt(payload?.expiresAt ?? '')
+      setQrCodeDataUrl(nextQrCodeDataUrl)
       setCurrentScreen('result')
     } catch {
       clearFinalImage({ clearError: false })
       setFinalImageError(FINAL_IMAGE_ERROR_MESSAGE)
     } finally {
       setIsRenderingFinalImage(false)
+      setIsUploadingShareImage(false)
     }
   }
 
@@ -1243,34 +2039,9 @@ function App() {
     setQrShareError('')
 
     try {
-      const shareImageBlob = await createShareImageBlob(finalImageBlob, finalImageUrl)
-      const response = await fetch('/api/final-images', {
-        method: 'POST',
-        headers: {
-          'Content-Type': shareImageBlob.type || 'image/png',
-        },
-        body: shareImageBlob,
-      })
-      const payload = await response.json()
-
-      if (!response.ok) {
-        throw new Error('Upload failed')
-      }
-
-      if (typeof payload?.id !== 'string' || payload.id.length === 0) {
-        throw new Error('Share image id is missing')
-      }
-
-      const pageUrl = normalizeSharePageUrl(payload?.pageUrl)
-      const nextQrCodeDataUrl = await QRCode.toDataURL(pageUrl, {
-        errorCorrectionLevel: 'M',
-        width: 320,
-        margin: 4,
-        color: {
-          dark: '#211822',
-          light: '#ffffff',
-        },
-      })
+      const payload = await uploadFinalImageForShare(finalImageBlob, finalImageUrl)
+      const pageUrl = payload.pageUrl
+      const nextQrCodeDataUrl = await createQrCodeDataUrl(pageUrl)
 
       setSharedImageId(payload.id)
       setSharedImagePageUrl(pageUrl)
@@ -1281,6 +2052,170 @@ function App() {
       setQrShareError(QR_SHARE_ERROR_MESSAGE)
     } finally {
       setIsUploadingShareImage(false)
+    }
+  }
+
+  const handleShareForPrint = async () => {
+    if (!finalImageBlob || printerConnectionState === 'printing') {
+      return
+    }
+
+    setPrintShareNotice('')
+    setPrintShareError('')
+    setPrintProgressPercent(null)
+
+    if (!directPrintSupported) {
+      const nextMessage =
+        '직접 인쇄를 사용하려면 Bluetooth 인쇄를 지원하는 부스 브라우저가 필요해요.'
+
+      setPrinterConnectionState('unsupported')
+      setPrinterStatusMessage(nextMessage)
+      setPrintShareError(nextMessage)
+      return
+    }
+
+    if (!hasConfiguredPrinter) {
+      setPrinterStatusMessage(DIRECT_PRINT_NOT_CONFIGURED_MESSAGE)
+      setPrintShareError(DIRECT_PRINT_NOT_CONFIGURED_MESSAGE)
+      return
+    }
+
+    if (printerConnectionState !== 'connected' || !printerRef.current?.isConnected()) {
+      setPrinterConnectionState('disconnected')
+      setPrinterStatusMessage(DIRECT_PRINT_RECONNECT_MESSAGE)
+      setPrintShareError(DIRECT_PRINT_RECONNECT_MESSAGE)
+      return
+    }
+
+    setPrinterConnectionState('printing')
+    setPrinterStatusMessage('인쇄 데이터를 전송하고 있어요.')
+    setPrintProgressPercent(0)
+
+    try {
+      const printerClient = await ensurePrinterConnectedForJob('인쇄 데이터를 전송하고 있어요.')
+
+      await printerClient.printImageBlob(finalImageBlob, printerSettings, {
+        allowReconnect: false,
+        onProgress: ({ percent }) => {
+          setPrintProgressPercent(percent)
+        },
+      })
+      setPrinterConnectionState(printerClient.isConnected() ? 'connected' : 'disconnected')
+      setPrinterStatusMessage(
+        printerClient.isConnected()
+          ? DIRECT_PRINT_COMPLETE_MESSAGE
+          : `${DIRECT_PRINT_COMPLETE_MESSAGE}\n다음 인쇄 전 프린터 다시 연결을 눌러 주세요.`,
+      )
+      setPrintShareNotice(DIRECT_PRINT_COMPLETE_MESSAGE)
+      setPrintProgressPercent(null)
+    } catch (error) {
+      const nextMessage = getPrinterErrorMessage(error)
+      const nextState =
+        error?.code === 'connection-lost' ||
+        error?.code === 'not-connected' ||
+        error?.code === 'device-missing' ||
+        error?.code === 'print-disconnected'
+          ? 'disconnected'
+          : 'error'
+
+      setPrinterConnectionState(nextState)
+      setPrinterStatusMessage(nextMessage)
+      setPrintShareError(nextMessage)
+      setPrintProgressPercent(null)
+    }
+  }
+
+  const handleReconnectPrinterFromResult = useCallback(async () => {
+    if (printerConnectionState === 'connecting' || printerConnectionState === 'printing') {
+      return
+    }
+
+    setPrintShareNotice('')
+    setPrintShareError('')
+    setPrintProgressPercent(null)
+
+    const result = await handlePrinterConnect()
+
+    if (result?.ok) {
+      const nextMessage = DIRECT_PRINT_RECONNECTED_MESSAGE
+
+      setPrinterStatusMessage(nextMessage)
+      setPrintShareNotice(nextMessage)
+      setPrintShareError('')
+      return
+    }
+
+    if (result?.message) {
+      setPrintShareError(result.message)
+    }
+  }, [handlePrinterConnect, printerConnectionState])
+
+  const handleAdminLongPrintExperiment = async () => {
+    if (!showPrinterSetupPanel || !finalImageBlob || printerConnectionState === 'printing') {
+      return
+    }
+
+    setPrintShareNotice('')
+    setPrintShareError('')
+    setAdminLongPrintProgress(null)
+    setPrintProgressPercent(0)
+
+    if (!directPrintSupported) {
+      const nextMessage =
+        '직접 인쇄를 사용하려면 Bluetooth 인쇄를 지원하는 부스 브라우저가 필요해요.'
+
+      setPrinterConnectionState('unsupported')
+      setPrinterStatusMessage(nextMessage)
+      setPrintShareError(nextMessage)
+      setPrintProgressPercent(null)
+      return
+    }
+
+    if (!hasConfiguredPrinter) {
+      setPrinterStatusMessage(DIRECT_PRINT_NOT_CONFIGURED_MESSAGE)
+      setPrintShareError(DIRECT_PRINT_NOT_CONFIGURED_MESSAGE)
+      setPrintProgressPercent(null)
+      return
+    }
+
+    setPrinterConnectionState('printing')
+    setPrinterStatusMessage('관리자 네컷 실험 인쇄 데이터를 전송하고 있어요.')
+
+    try {
+      const printerClient = await ensurePrinterConnectedForJob(
+        '관리자 네컷 실험 인쇄 데이터를 전송하고 있어요.',
+      )
+
+      await printerClient.printAdminExperimentalImageBlob(finalImageBlob, printerSettings, {
+        allowAdminLongPrintExperiment: true,
+        allowReconnect: false,
+        onProgress: (progress) => {
+          setAdminLongPrintProgress(progress)
+          setPrintProgressPercent(progress.percent)
+        },
+      })
+      setPrinterConnectionState(printerClient.isConnected() ? 'connected' : 'disconnected')
+      setPrinterStatusMessage(
+        printerClient.isConnected()
+          ? '관리자 네컷 실험 인쇄 전송 완료'
+          : '관리자 네컷 실험 인쇄 전송 완료\n다음 인쇄 시 자동 재연결을 시도해요.',
+      )
+      setPrintShareNotice('관리자 네컷 실험 인쇄 전송 완료')
+      setPrintProgressPercent(null)
+    } catch (error) {
+      const nextMessage = getPrinterErrorMessage(error)
+      const nextState =
+        error?.code === 'connection-lost' ||
+        error?.code === 'not-connected' ||
+        error?.code === 'device-missing' ||
+        error?.code === 'print-disconnected'
+          ? 'disconnected'
+          : 'error'
+
+      setPrinterConnectionState(nextState)
+      setPrinterStatusMessage(nextMessage)
+      setPrintShareError(nextMessage)
+      setPrintProgressPercent(null)
     }
   }
 
@@ -1321,7 +2256,41 @@ function App() {
 
   return (
     <div className="life4cut-app">
-      {currentScreen === 'start' && <StartScreen onStart={() => setCurrentScreen('guide')} />}
+      {currentScreen === 'start' && (
+        <StartScreen
+          printerSetupPanel={
+            showPrinterSetupPanel ? (
+              <PrinterSetupPanel
+                directPrintSupported={directPrintSupported}
+                longPrintDensityLabel={getPrinterDensityLabel(SAFE_PHOTO_DENSITY)}
+                minLongPrintBatteryPercent={MIN_LONG_PRINT_BATTERY_PERCENT}
+                longDirectPrintEnabled={true}
+                isAwaitingTestPrintConfirmation={isAwaitingTestPrintConfirmation}
+                isDirectPrintVerified={isDirectPrintVerified}
+                printerBatteryPercent={printerBatteryPercent}
+                printerConnectionState={printerConnectionState}
+                printerDeviceName={printerDeviceName}
+                printerFirmwareVersion={printerFirmwareVersion}
+                printerHealthStatus={printerHealthStatus}
+                printerModel={printerModel}
+                printerSettings={printerSettings}
+                printerStatusMessage={printerStatusMessage}
+                printerTransportDiagnostics={printerTransportDiagnostics}
+                onConfirmTestPrint={handleConfirmTestPrint}
+                onConnectAnyBleDevice={handleShowAllBleDevices}
+                onConnectPrinter={handlePrinterConnect}
+                onDensityChange={handlePrinterDensityChange}
+                onDisconnectPrinter={handlePrinterDisconnect}
+                onPrintTest={handleTestPrint}
+                onTestRasterWriteModeChange={handleTestRasterWriteModeChange}
+                onPrintWidthChange={handlePrinterWidthChange}
+                onRefreshStatus={handleRefreshPrinterStatus}
+              />
+            ) : null
+          }
+          onStart={() => setCurrentScreen('guide')}
+        />
+      )}
 
       {currentScreen === 'guide' && (
         <GuideScreen
@@ -1385,34 +2354,43 @@ function App() {
         <FrameCustomizer
           brandHeader={<BrandHeader />}
           frameColor={frameColor}
-          frameMessage={frameMessage}
-          frameNotice={frameNotice}
           finalImageError={finalImageError}
           isRenderingFinalImage={isRenderingFinalImage}
-          maxMessageLength={FRAME_MESSAGE_MAX_LENGTH}
           selectedPhotos={selectedPhotos}
           showDate={showFrameDate}
           onBackToSelection={handleBackToSelectionPreview}
           onCreateFinalImage={handleCreateFinalImage}
           onFrameColorChange={setFrameColor}
-          onFrameMessageChange={handleFrameMessageChange}
           onShowDateChange={setShowFrameDate}
         />
       )}
 
       {currentScreen === 'result' && (
         <FinalResultScreen
+          adminLongPrintProgress={adminLongPrintProgress}
           finalImageUrl={finalImageUrl}
           hasFinalImage={hasFinalImage}
+          isDirectPrintReady={isDirectPrintReady}
+          isLongDirectPrintEnabled={true}
+          isPrinterSetupMode={showPrinterSetupPanel}
           isQrDialogOpen={isQrDialogOpen}
           isUploadingShareImage={isUploadingShareImage}
+          printProgressPercent={printProgressPercent}
+          printShareError={printShareError}
+          printShareNotice={printShareNotice}
+          printerConnectionState={printerConnectionState}
           qrButtonRef={qrButtonRef}
           qrCodeDataUrl={qrCodeDataUrl}
           qrShareError={qrShareError}
           sharedImageExpiresAt={sharedImageExpiresAt}
           sharedImagePageUrl={sharedImagePageUrl}
+          showPrinterReconnect={shouldShowPrinterReconnect}
+          onAdminLongPrintExperiment={handleAdminLongPrintExperiment}
+          onBackToFrame={handleOpenFrame}
           onCloseQrDialog={handleCloseQrDialog}
           onOpenQrShare={handleOpenQrShare}
+          onReconnectPrinter={handleReconnectPrinterFromResult}
+          onShareForPrint={handleShareForPrint}
           onStartOver={handleBackToStart}
         />
       )}

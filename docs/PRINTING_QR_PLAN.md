@@ -119,16 +119,14 @@ QRCode.toDataURL(pageUrl, {
 
 ## 인쇄 기능 상태
 
-`인쇄하기` 버튼은 결과 화면에 표시되지만 현재 disabled 상태다. 실제 프린터 연결은 아직 구현하지 않는다.
+운영자 화면 `?printerSetup=1`에는 Luck Jingle PPS1용 Web Bluetooth 연결과 짧은 테스트 인쇄가 구현되어 있다. 일반 검색은 `PPS1_`로 시작하는 장치만 보여주며, 문제 해결용 `전체 BLE 장치 보기` 버튼에서만 전체 BLE 장치를 표시한다.
 
-프린터 모델이 결정되면 다음 정보가 필요하다.
+PPS1 BLE transport는 공식 Android APK 분석 결과에 맞춰 `ff03` credit notification을 사용한다. 실제 write는 Web Bluetooth에서 MTU를 요청하지 않고 `20 bytes` packet으로 보수적으로 전송한다.
 
-- 제조사와 정확한 모델명
-- 태블릿 운영체제와 브라우저
-- 연결 방식: Bluetooth, USB, Wi-Fi, 제조사 앱 또는 SDK
-- 용지 폭과 해상도
-- 컬러/흑백 지원 여부
-- 자동 절단 지원 여부
-- Web Bluetooth 또는 Web Serial 사용 가능 여부
+결과 화면의 긴 최종 이미지 직접 인쇄는 현재 기본 잠금 상태다. `PPS1_LONG_PRINT_EXPERIMENTAL` 값이 `false`이므로 `인쇄하기`를 눌러도 긴 BLE 인쇄 데이터를 보내지 않고 다음 안내만 표시한다.
 
-인쇄 단계에서는 QR을 포함한 별도 print 전용 이미지를 만들지, 현재 완성 이미지를 그대로 출력할지 결정해야 한다.
+`직접 인쇄 프로토콜을 확인 중이에요. 관리자에게 알려 주세요.`
+
+QR 다운로드와 원본 최종 PNG 생성 기능은 직접 BLE 인쇄 잠금과 독립적으로 계속 동작한다.
+
+다음 인쇄 단계에서는 실제 PPS1용 LuckPrinter SDK print flow를 확인해야 한다. 조사 내용은 `docs/PPS1_PROTOCOL_INVESTIGATION.md`에 기록한다.

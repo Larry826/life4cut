@@ -4,15 +4,12 @@ import {
   formatLocalFrameDate,
   getFrameOption,
 } from '../constants/frameOptions'
-import oazLogo from '../assets/oaz_logo.png'
 
 const cutOrderLabels = ['첫 번째', '두 번째', '세 번째', '네 번째']
+const oazSideLabels = ['OAZ', '하나와영', 'HANAWAYOUNG', '']
 
-function PhotoStripPreview({ frameColor, frameMessage, selectedPhotos, showDate }) {
+function PhotoStripPreview({ frameColor, selectedPhotos, showDate }) {
   const frameOption = getFrameOption(frameColor)
-  const trimmedMessage = frameMessage.trim()
-  const hasCustomMessage = trimmedMessage.length > 0
-  const previewMessage = hasCustomMessage ? trimmedMessage : FRAME_BRAND_MESSAGE
   const formattedDate = formatLocalFrameDate()
   const isOazFrame = frameOption.id === 'oaz'
 
@@ -28,28 +25,49 @@ function PhotoStripPreview({ frameColor, frameMessage, selectedPhotos, showDate 
       }}
       aria-label={`${frameOption.label} 프레임으로 꾸민 세로 네컷 미리보기`}
     >
+      <div className="frame-strip-topbar" aria-hidden="true">
+        <span className="frame-strip-qr-preview" />
+      </div>
       <div className="frame-strip-photos">
-        {selectedPhotos.map((photo, index) => (
-          <img
-            className="frame-strip-photo"
-            src={photo.url}
-            alt={`최종 네컷의 ${cutOrderLabels[index]} 사진`}
-            key={photo.id}
-          />
-        ))}
+        {selectedPhotos.map((photo, index) => {
+          const sideLabel = isOazFrame ? oazSideLabels[index] : ''
+
+          return (
+            <div
+              className={`frame-strip-photo-cell ${
+                sideLabel ? 'frame-strip-photo-cell-labeled' : ''
+              }`}
+              key={photo.id}
+            >
+              {sideLabel && (
+                <span
+                  className="frame-strip-side-text frame-strip-side-text-left"
+                  aria-hidden="true"
+                >
+                  {sideLabel}
+                </span>
+              )}
+              <img
+                className="frame-strip-photo"
+                src={photo.url}
+                alt={`최종 네컷의 ${cutOrderLabels[index]} 사진`}
+              />
+              {sideLabel && (
+                <span
+                  className="frame-strip-side-text frame-strip-side-text-right"
+                  aria-hidden="true"
+                >
+                  {sideLabel}
+                </span>
+              )}
+            </div>
+          )
+        })}
       </div>
       <figcaption className="frame-strip-footer">
-        {isOazFrame && (
-          <span className="frame-strip-logo-card">
-            <img className="frame-strip-logo" src={oazLogo} alt="OAZ 학회 로고" />
-          </span>
-        )}
-        <p className="frame-strip-message" title={previewMessage}>
-          {previewMessage}
+        <p className="frame-strip-message" title={FRAME_BRAND_MESSAGE}>
+          {FRAME_BRAND_MESSAGE}
         </p>
-        {hasCustomMessage && !isOazFrame && (
-          <p className="frame-strip-brand">{FRAME_BRAND_MESSAGE}</p>
-        )}
         {showDate && <p className="frame-strip-date">{formattedDate}</p>}
       </figcaption>
     </figure>
@@ -64,7 +82,9 @@ function FrameColorSelector({ frameColor, onFrameColorChange }) {
 
         return (
           <button
-            className={`frame-color-button ${isSelected ? 'frame-color-button-selected' : ''}`}
+            className={`frame-color-button frame-color-button-${option.id} ${
+              isSelected ? 'frame-color-button-selected' : ''
+            }`}
             style={{
               '--option-background': option.background,
               '--option-border': option.border,
@@ -75,7 +95,10 @@ function FrameColorSelector({ frameColor, onFrameColorChange }) {
             key={option.id}
             onClick={() => onFrameColorChange(option.id)}
           >
-            <span className="frame-color-swatch" aria-hidden="true" />
+            <span
+              className={`frame-color-swatch frame-color-swatch-${option.id}`}
+              aria-hidden="true"
+            />
             <span className="frame-color-label">{option.label}</span>
             <span className="frame-color-selected-text">
               {isSelected ? '선택됨' : '선택'}
@@ -90,23 +113,17 @@ function FrameColorSelector({ frameColor, onFrameColorChange }) {
 function FrameCustomizer({
   brandHeader,
   frameColor,
-  frameMessage,
-  frameNotice,
   finalImageError,
   isRenderingFinalImage,
-  maxMessageLength,
   onBackToSelection,
   onCreateFinalImage,
   onFrameColorChange,
-  onFrameMessageChange,
   onShowDateChange,
   selectedPhotos,
   showDate,
 }) {
   const hasValidPhotos =
     selectedPhotos.length === 4 && selectedPhotos.every((photo) => photo?.id && photo?.url)
-  const messageCountId = 'frame-message-count'
-  const messageNoticeId = 'frame-message-notice'
 
   if (!hasValidPhotos) {
     return (
@@ -138,7 +155,7 @@ function FrameCustomizer({
           {brandHeader}
           <h1 id="frame-title">프레임을 꾸며 주세요</h1>
           <p className="screen-description">
-            선택한 네 장에 어울리는 색상과 문구를 골라 보세요.
+            선택한 네 장에 어울리는 색상과 날짜 표시를 골라 보세요.
           </p>
         </div>
 
@@ -146,7 +163,6 @@ function FrameCustomizer({
           <div className="frame-preview-area" aria-label="프레임 미리보기 영역">
             <PhotoStripPreview
               frameColor={frameColor}
-              frameMessage={frameMessage}
               selectedPhotos={selectedPhotos}
               showDate={showDate}
             />
@@ -176,35 +192,6 @@ function FrameCustomizer({
                   <span>프레임 아래에 오늘 날짜를 표시해요.</span>
                 </span>
               </label>
-            </div>
-
-            <div className="frame-setting-group">
-              <label className="frame-field-label" htmlFor="frame-message-input">
-                하단 문구
-              </label>
-              <input
-                aria-describedby={`${messageCountId}${frameNotice ? ` ${messageNoticeId}` : ''}`}
-                className="frame-message-input"
-                id="frame-message-input"
-                maxLength={maxMessageLength}
-                placeholder="우리의 오늘을 기억해"
-                type="text"
-                value={frameMessage}
-                onChange={(event) => onFrameMessageChange(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault()
-                  }
-                }}
-              />
-              <p className="frame-message-count" id={messageCountId}>
-                {frameMessage.length} / {maxMessageLength}
-              </p>
-              {frameNotice && (
-                <p className="frame-field-notice" id={messageNoticeId}>
-                  {frameNotice}
-                </p>
-              )}
             </div>
 
             {finalImageError && (

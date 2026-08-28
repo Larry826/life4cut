@@ -1,8 +1,6 @@
 export const FRAME_BRAND_MESSAGE = 'OAZ LIFE4CUT'
 export const DEFAULT_FRAME_COLOR = 'white'
-export const DEFAULT_FRAME_INPUT_MESSAGE = ''
 export const DEFAULT_SHOW_FRAME_DATE = true
-export const FRAME_MESSAGE_MAX_LENGTH = 24
 
 export const FRAME_OPTIONS = [
   {
@@ -32,8 +30,18 @@ export const FRAME_OPTIONS = [
     foreground: '#18141a',
     secondaryText: '#645a65',
     border: '#eadfea',
-    accent: '#ed5ba7',
-    softAccent: '#fff0f7',
+    accent: '#111111',
+    softAccent: '#ffffff',
+  },
+  {
+    id: 'circuit',
+    label: '회로 스타일',
+    background: '#ffffff',
+    foreground: '#111111',
+    secondaryText: '#4f4f4f',
+    border: '#111111',
+    accent: '#111111',
+    softAccent: '#f6f6f0',
   },
 ]
 

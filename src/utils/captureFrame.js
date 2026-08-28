@@ -1,5 +1,5 @@
-const CAPTURE_WIDTH = 1080
-const CAPTURE_HEIGHT = 1440
+const CAPTURE_WIDTH = 1440
+const CAPTURE_HEIGHT = 1080
 const CAPTURE_TYPE = 'image/jpeg'
 const CAPTURE_QUALITY = 0.9
 

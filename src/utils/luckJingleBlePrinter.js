@@ -35,6 +35,7 @@ export const DENSITY_OPTIONS = [
 ]
 
 export const MIN_LONG_PRINT_BATTERY_PERCENT = 30
+export const PRINT_EXTRA_BOTTOM_FEED_MM = 50
 export const BAND_HEIGHT = 96
 export const BAND_PAUSE_MS = 500
 export const STATUS_CHECK_EVERY_BANDS = 2
@@ -97,6 +98,12 @@ const MAX_REQUESTED_PACKET_SIZE = 512
 const PACKET_SIZE_SOURCE_DEFAULT = 'default 20'
 const PACKET_SIZE_SOURCE_FF03 = 'FF03 requested'
 const TEST_IMAGE_HEIGHT = 128
+const PPS1_DOTS_PER_INCH = 203
+const MILLIMETERS_PER_INCH = 25.4
+const MAX_FEED_COMMAND_DOTS = 0xff
+const PRINT_EXTRA_BOTTOM_FEED_DOTS = Math.round(
+  (PRINT_EXTRA_BOTTOM_FEED_MM * PPS1_DOTS_PER_INCH) / MILLIMETERS_PER_INCH,
+)
 const TEST_JOB_MARKERS = [
   { name: 'A', y: 10 },
   { name: 'B', y: 68 },
@@ -575,6 +582,19 @@ function createPrintWidthCommand(printWidth) {
 
 function createFeedCommand(feedDots) {
   return Uint8Array.of(0x1b, 0x4a, feedDots & 0xff)
+}
+
+function createFeedCommands(feedDots) {
+  const totalDots = Math.max(0, Math.round(Number(feedDots) || 0))
+  const commands = []
+
+  for (let remainingDots = totalDots; remainingDots > 0; ) {
+    const commandDots = Math.min(remainingDots, MAX_FEED_COMMAND_DOTS)
+    commands.push(createFeedCommand(commandDots))
+    remainingDots -= commandDots
+  }
+
+  return commands
 }
 
 function createRequestDeviceOptions(options = {}) {
@@ -1944,6 +1964,7 @@ export class LuckJingleBlePrinter {
       totalPackets,
     })
     await this.sendPrintJob(rasterCommand, profile, {
+      extraBottomFeedDots: PRINT_EXTRA_BOTTOM_FEED_DOTS,
       markLastPage: true,
       onRasterProgress: onProgress,
       rasterWriteMode,
@@ -2018,6 +2039,7 @@ export class LuckJingleBlePrinter {
 
   async sendPrintJob(rasterCommand, profile, options = {}) {
     const {
+      extraBottomFeedDots = 0,
       markLastPage = false,
       onRasterProgress,
       rasterWriteMode = TEST_RASTER_WRITE_MODES.withoutResponse,
@@ -2047,6 +2069,14 @@ export class LuckJingleBlePrinter {
         trace,
       })
       await this.writePrintTraceStep('feed', createFeedCommand(profile.feedDots), { trace })
+
+      const extraFeedCommands = createFeedCommands(extraBottomFeedDots)
+
+      for (let feedIndex = 0; feedIndex < extraFeedCommands.length; feedIndex += 1) {
+        await this.writePrintTraceStep(`extra-feed-${feedIndex + 1}`, extraFeedCommands[feedIndex], {
+          trace,
+        })
+      }
 
       if (markLastPage) {
         await this.writePrintTraceStep('mark-last', SET_MARK_PRINT_LAST_COMMAND, { trace })

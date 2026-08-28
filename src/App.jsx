@@ -973,6 +973,7 @@ function App() {
   const [sharedImagePageUrl, setSharedImagePageUrl] = useState('')
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('')
   const [sharedImageExpiresAt, setSharedImageExpiresAt] = useState('')
+  const [isShareImageUploaded, setIsShareImageUploaded] = useState(false)
   const [isQrDialogOpen, setIsQrDialogOpen] = useState(false)
   const [qrShareError, setQrShareError] = useState('')
   const [printShareNotice, setPrintShareNotice] = useState('')
@@ -1017,6 +1018,7 @@ function App() {
   const testPrintInFlightRef = useRef(false)
   const capturedPhotosRef = useRef([])
   const finalImageUrlRef = useRef('')
+  const finalImageJobRef = useRef(0)
   const captureTimeoutsRef = useRef(new Set())
   const captureSessionRef = useRef(0)
   const selectedPhotos = selectedPhotoIds
@@ -1118,6 +1120,7 @@ function App() {
     setSharedImagePageUrl('')
     setQrCodeDataUrl('')
     setSharedImageExpiresAt('')
+    setIsShareImageUploaded(false)
     setIsQrDialogOpen(false)
     setQrShareError('')
   }, [])
@@ -1132,6 +1135,7 @@ function App() {
   const clearFinalImage = useCallback((options = {}) => {
     const { clearError = true } = options
 
+    finalImageJobRef.current += 1
     resetQrShareState()
     resetPrintShareState()
 
@@ -1976,7 +1980,10 @@ function App() {
     setIsRenderingFinalImage(true)
     setFinalImageError('')
     clearFinalImage({ clearError: false })
-    setIsUploadingShareImage(true)
+
+    const finalImageJobId = finalImageJobRef.current + 1
+    finalImageJobRef.current = finalImageJobId
+    const isCurrentFinalImageJob = () => finalImageJobRef.current === finalImageJobId
 
     try {
       const shareImageId = createShareImageId()
@@ -1989,30 +1996,62 @@ function App() {
         dateText: formatLocalFrameDate(),
         qrCodeDataUrl: nextQrCodeDataUrl,
       })
-      const payload = await uploadFinalImageForShare(pngBlob, '', {
-        imageId: shareImageId,
-      })
-
-      if (payload.id !== shareImageId) {
-        throw new Error('Share image id mismatch')
-      }
-
       const pngUrl = URL.createObjectURL(pngBlob)
+
+      if (!isCurrentFinalImageJob()) {
+        URL.revokeObjectURL(pngUrl)
+        return
+      }
 
       finalImageUrlRef.current = pngUrl
       setFinalImageBlob(pngBlob)
       setFinalImageUrl(pngUrl)
       setSharedImageId(shareImageId)
       setSharedImagePageUrl(sharePageUrl)
-      setSharedImageExpiresAt(payload?.expiresAt ?? '')
+      setSharedImageExpiresAt('')
       setQrCodeDataUrl(nextQrCodeDataUrl)
+      setIsShareImageUploaded(false)
       setCurrentScreen('result')
-    } catch {
-      clearFinalImage({ clearError: false })
-      setFinalImageError(FINAL_IMAGE_ERROR_MESSAGE)
-    } finally {
       setIsRenderingFinalImage(false)
-      setIsUploadingShareImage(false)
+      setIsUploadingShareImage(true)
+
+      try {
+        const payload = await uploadFinalImageForShare(pngBlob, pngUrl, {
+          imageId: shareImageId,
+        })
+
+        if (payload.id !== shareImageId) {
+          throw new Error('Share image id mismatch')
+        }
+
+        if (!isCurrentFinalImageJob()) {
+          return
+        }
+
+        setSharedImageExpiresAt(payload?.expiresAt ?? '')
+        setIsShareImageUploaded(true)
+        setQrShareError('')
+      } catch {
+        if (isCurrentFinalImageJob()) {
+          setIsShareImageUploaded(false)
+          setQrShareError(QR_SHARE_ERROR_MESSAGE)
+        }
+      } finally {
+        if (isCurrentFinalImageJob()) {
+          setIsUploadingShareImage(false)
+        }
+      }
+    } catch {
+      if (isCurrentFinalImageJob()) {
+        clearFinalImage({ clearError: false })
+        setFinalImageError(FINAL_IMAGE_ERROR_MESSAGE)
+        setIsRenderingFinalImage(false)
+        setIsUploadingShareImage(false)
+      }
+    } finally {
+      if (isCurrentFinalImageJob()) {
+        setIsRenderingFinalImage(false)
+      }
     }
   }
 
@@ -2029,7 +2068,9 @@ function App() {
       return
     }
 
-    if (sharedImageId && sharedImagePageUrl && qrCodeDataUrl) {
+    const hasPreparedShareTarget = Boolean(sharedImageId && sharedImagePageUrl && qrCodeDataUrl)
+
+    if (hasPreparedShareTarget && isShareImageUploaded) {
       setQrShareError('')
       setIsQrDialogOpen(true)
       return
@@ -2039,16 +2080,29 @@ function App() {
     setQrShareError('')
 
     try {
-      const payload = await uploadFinalImageForShare(finalImageBlob, finalImageUrl)
-      const pageUrl = payload.pageUrl
-      const nextQrCodeDataUrl = await createQrCodeDataUrl(pageUrl)
+      const payload = await uploadFinalImageForShare(
+        finalImageBlob,
+        finalImageUrl,
+        hasPreparedShareTarget ? { imageId: sharedImageId } : {},
+      )
+
+      if (hasPreparedShareTarget && payload.id !== sharedImageId) {
+        throw new Error('Share image id mismatch')
+      }
+
+      const pageUrl = hasPreparedShareTarget ? sharedImagePageUrl : payload.pageUrl
+      const nextQrCodeDataUrl = hasPreparedShareTarget
+        ? qrCodeDataUrl
+        : await createQrCodeDataUrl(pageUrl)
 
       setSharedImageId(payload.id)
       setSharedImagePageUrl(pageUrl)
       setSharedImageExpiresAt(payload?.expiresAt ?? '')
       setQrCodeDataUrl(nextQrCodeDataUrl)
+      setIsShareImageUploaded(true)
       setIsQrDialogOpen(true)
     } catch {
+      setIsShareImageUploaded(false)
       setQrShareError(QR_SHARE_ERROR_MESSAGE)
     } finally {
       setIsUploadingShareImage(false)
@@ -2374,6 +2428,7 @@ function App() {
           isLongDirectPrintEnabled={true}
           isPrinterSetupMode={showPrinterSetupPanel}
           isQrDialogOpen={isQrDialogOpen}
+          isShareImageUploaded={isShareImageUploaded}
           isUploadingShareImage={isUploadingShareImage}
           printProgressPercent={printProgressPercent}
           printShareError={printShareError}

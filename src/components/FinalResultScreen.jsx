@@ -8,6 +8,7 @@ function FinalResultScreen({
   isLongDirectPrintEnabled,
   isPrinterSetupMode,
   isQrDialogOpen,
+  isShareImageUploaded,
   isUploadingShareImage,
   printProgressPercent,
   printShareError,
@@ -31,7 +32,7 @@ function FinalResultScreen({
   const isPrintingDirectly = printerConnectionState === 'printing'
   const isPrinterConnecting = printerConnectionState === 'connecting'
   const isPrinterBusy = isPrintingDirectly || isPrinterConnecting
-  const canShareForPrint = hasFinalImage && !isPrinterBusy
+  const canShareForPrint = hasFinalImage && isShareImageUploaded && !isPrinterBusy
   const canEditFrame = Boolean(hasFinalImage && !isPrinterBusy && onBackToFrame)
   const canReconnectPrinter =
     Boolean(showPrinterReconnect && hasFinalImage && !isPrinterBusy && onReconnectPrinter)
@@ -47,7 +48,7 @@ function FinalResultScreen({
         : isPrinterConnecting
           ? '프린터 연결 중...'
         : '인쇄하기'
-  const hasQrDialogData = Boolean(qrCodeDataUrl && sharedImagePageUrl)
+  const hasQrDialogData = Boolean(qrCodeDataUrl && sharedImagePageUrl && isShareImageUploaded)
   const adminProgressLabel =
     adminLongPrintProgress &&
     Number.isFinite(adminLongPrintProgress.completedBytes) &&
@@ -208,7 +209,7 @@ function FinalResultScreen({
 
             <div className="qr-status-area" aria-live="polite">
               {isUploadingShareImage && <p>서버에 이미지를 임시 저장하고 있어요.</p>}
-              {!isUploadingShareImage && sharedImagePageUrl && (
+              {!isUploadingShareImage && isShareImageUploaded && sharedImagePageUrl && (
                 <p>QR 다운로드 페이지가 준비됐어요.</p>
               )}
             </div>
